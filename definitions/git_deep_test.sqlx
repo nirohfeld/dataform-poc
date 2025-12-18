@@ -1,0 +1,123 @@
+-- Deep .git Directory Exploration
+-- Tests for any exploitable paths in .git/
+
+config {
+  type: "view",
+  name: "git_deep_test"
+}
+
+js {
+  let results = [];
+
+  // Test 1: List all readable .git files
+  const gitFiles = [
+    ".git/config",
+    ".git/HEAD",
+    ".git/description",
+    ".git/index",
+    ".git/packed-refs",
+    ".git/COMMIT_EDITMSG",
+    ".git/FETCH_HEAD",
+    ".git/ORIG_HEAD",
+    ".git/refs/heads/main",
+    ".git/refs/heads/master",
+    ".git/refs/heads/test-workspace",
+    ".git/refs/remotes/origin/HEAD",
+    ".git/refs/remotes/origin/main",
+    ".git/logs/HEAD",
+    ".git/logs/refs/heads/main",
+    ".git/info/exclude",
+    ".git/info/refs"
+  ];
+
+  for (const f of gitFiles) {
+    try {
+      if (restricted_fs.exists(f)) {
+        if (restricted_fs.isDirectory(f)) {
+          results.push(f + ": DIR");
+        } else {
+          const content = restricted_fs.readFile(f);
+          results.push(f + ": len=" + content.length + " - " + content.substring(0, 80).replace(/\n/g, "\\n"));
+        }
+      }
+    } catch(e) {
+      // Skip not found
+    }
+  }
+
+  // Test 2: Check for hooks
+  const hooks = [
+    ".git/hooks/pre-commit",
+    ".git/hooks/post-commit",
+    ".git/hooks/pre-push",
+    ".git/hooks/post-receive",
+    ".git/hooks/pre-receive",
+    ".git/hooks/update",
+    ".git/hooks/applypatch-msg",
+    ".git/hooks/commit-msg",
+    ".git/hooks/post-checkout",
+    ".git/hooks/post-merge"
+  ];
+
+  results.push("=== HOOKS ===");
+  for (const h of hooks) {
+    try {
+      if (restricted_fs.exists(h)) {
+        const content = restricted_fs.readFile(h);
+        results.push(h + ": EXISTS len=" + content.length);
+      }
+    } catch(e) {
+      // Skip
+    }
+  }
+
+  // Test 3: Try to read git objects
+  try {
+    // Objects are stored as .git/objects/XX/XXXX...
+    // Check if objects directory is listable
+    const objExists = restricted_fs.exists(".git/objects");
+    const objIsDir = restricted_fs.isDirectory(".git/objects");
+    results.push("=== OBJECTS ===");
+    results.push("objects: exists=" + objExists + " isDir=" + objIsDir);
+
+    // Try common object prefixes (first 2 chars of sha)
+    const prefixes = ["00", "01", "0a", "0b", "0c", "0d", "0e", "0f", "1a", "2a", "3a", "4a", "5a", "6a", "7a", "8a", "9a", "aa", "ab", "ac", "ad", "ae", "af", "ba", "bb", "bc", "bd", "be", "bf", "ca", "cb", "cc", "cd", "ce", "cf", "da", "db", "dc", "dd", "de", "df", "ea", "eb", "ec", "ed", "ee", "ef", "fa", "fb", "fc", "fd", "fe", "ff"];
+    let foundPrefixes = [];
+    for (const p of prefixes.slice(0, 20)) {
+      try {
+        if (restricted_fs.exists(".git/objects/" + p)) {
+          foundPrefixes.push(p);
+        }
+      } catch(e) {}
+    }
+    results.push("object_prefixes_found: " + foundPrefixes.join(","));
+  } catch(e) {
+    results.push("objects_error: " + e.message);
+  }
+
+  // Test 4: Check pack files (larger repos use these)
+  try {
+    const packExists = restricted_fs.exists(".git/objects/pack");
+    results.push("=== PACKS ===");
+    results.push("pack_dir: " + packExists);
+  } catch(e) {}
+
+  // Test 5: Check for modules (submodules)
+  try {
+    const modulesExists = restricted_fs.exists(".git/modules");
+    results.push("=== MODULES ===");
+    results.push("modules_dir: " + modulesExists);
+  } catch(e) {}
+
+  // Test 6: Full git config dump
+  try {
+    results.push("=== FULL CONFIG ===");
+    const config = restricted_fs.readFile(".git/config");
+    results.push(config);
+  } catch(e) {
+    results.push("config_error: " + e.message);
+  }
+}
+
+SELECT
+  '${JSON.stringify(results)}' as git_deep_results
