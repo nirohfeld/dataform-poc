@@ -1,0 +1,170 @@
+-- Prototype Pollution Sandbox Escape Test
+-- Tests if polluted prototypes persist and affect sandbox behavior
+
+config {
+  type: "view",
+  name: "prototype_pollution_test"
+}
+
+js {
+  let results = [];
+
+  // Test 1: Basic prototype pollution
+  try {
+    Object.prototype.polluted = "POLLUTED";
+    const obj = {};
+    results.push("1_basic_pollution: " + obj.polluted);
+    delete Object.prototype.polluted;
+  } catch(e) {
+    results.push("1_basic_pollution: FAIL - " + e.message);
+  }
+
+  // Test 2: Pollute with process-like object
+  try {
+    Object.prototype.process = {
+      env: {SECRET: "leaked"},
+      mainModule: {require: function() { return "INJECTED"; }}
+    };
+    const obj = {};
+    results.push("2_process_pollution: process.env=" + (obj.process ? JSON.stringify(obj.process.env) : "null"));
+    delete Object.prototype.process;
+  } catch(e) {
+    results.push("2_process_pollution: FAIL - " + e.message);
+  }
+
+  // Test 3: Pollute Function.prototype.constructor
+  try {
+    const origCtor = Function.prototype.constructor;
+    let called = false;
+    Function.prototype.constructor = function(...args) {
+      called = true;
+      return origCtor.apply(this, args);
+    };
+    const f = new Function("return 1");
+    results.push("3_function_ctor: called=" + called + " result=" + f());
+    Function.prototype.constructor = origCtor;
+  } catch(e) {
+    results.push("3_function_ctor: FAIL - " + e.message);
+  }
+
+  // Test 4: Pollute Array prototype for iteration gadgets
+  try {
+    const origPush = Array.prototype.push;
+    let intercepted = [];
+    Array.prototype.push = function(...items) {
+      intercepted.push(...items);
+      return origPush.apply(this, items);
+    };
+    const arr = [];
+    arr.push("test");
+    results.push("4_array_push: intercepted=" + JSON.stringify(intercepted));
+    Array.prototype.push = origPush;
+  } catch(e) {
+    results.push("4_array_push: FAIL - " + e.message);
+  }
+
+  // Test 5: Pollute Object.prototype.__proto__
+  try {
+    const origProto = Object.prototype.__proto__;
+    results.push("5_proto_access: " + typeof origProto);
+    // Try to set it to something with process
+    try {
+      Object.defineProperty(Object.prototype, '__proto__', {
+        get: function() { return {process: global.process}; }
+      });
+      const obj = {};
+      results.push("5_proto_override: " + typeof obj.__proto__.process);
+    } catch(e2) {
+      results.push("5_proto_override: " + e2.message.substring(0, 50));
+    }
+  } catch(e) {
+    results.push("5_proto: FAIL - " + e.message);
+  }
+
+  // Test 6: Check if pollution affects restricted_fs
+  try {
+    Object.prototype.readFile = function(path) {
+      return "HIJACKED: " + path;
+    };
+    // restricted_fs.readFile is a function, not accessing via prototype
+    const hasOwn = restricted_fs.hasOwnProperty("readFile");
+    results.push("6_fs_hijack: hasOwn=" + hasOwn);
+    delete Object.prototype.readFile;
+  } catch(e) {
+    results.push("6_fs_hijack: FAIL - " + e.message);
+  }
+
+  // Test 7: Pollute require behavior
+  try {
+    const origRequire = require;
+    let requireLog = [];
+    global.require = function(mod) {
+      requireLog.push(mod);
+      return origRequire(mod);
+    };
+    // Try to require something
+    try { require("./definitions/simple_test.sqlx"); } catch(e) {}
+    results.push("7_require_intercept: " + JSON.stringify(requireLog));
+    global.require = origRequire;
+  } catch(e) {
+    results.push("7_require: FAIL - " + e.message);
+  }
+
+  // Test 8: Check Symbol.species for array subclassing attacks
+  try {
+    class EvilArray extends Array {
+      static get [Symbol.species]() {
+        return class {
+          constructor() {
+            return {evil: true};
+          }
+        };
+      }
+    }
+    const evil = new EvilArray(1, 2, 3);
+    const mapped = evil.map(x => x);
+    results.push("8_symbol_species: " + JSON.stringify(mapped));
+  } catch(e) {
+    results.push("8_symbol_species: FAIL - " + e.message);
+  }
+
+  // Test 9: Check Error.prepareStackTrace for stack inspection
+  try {
+    let stackInfo = [];
+    const origPST = Error.prepareStackTrace;
+    Error.prepareStackTrace = (err, stack) => {
+      stackInfo = stack.map(s => ({
+        fn: s.getFunctionName(),
+        file: s.getFileName(),
+        eval: s.isEval(),
+        native: s.isNative(),
+        ctor: s.isConstructor(),
+        this: typeof s.getThis()
+      }));
+      return "";
+    };
+    const e = new Error();
+    e.stack;
+    Error.prepareStackTrace = origPST;
+    results.push("9_stack_trace: " + JSON.stringify(stackInfo.slice(0, 3)));
+  } catch(e) {
+    results.push("9_stack_trace: FAIL - " + e.message);
+  }
+
+  // Test 10: Check Proxy on global objects
+  try {
+    const handler = {
+      get: function(target, prop) {
+        if (prop === 'process') return {env: {LEAKED: true}};
+        return Reflect.get(target, prop);
+      }
+    };
+    const proxiedGlobal = new Proxy(globalThis, handler);
+    results.push("10_proxy_global: process=" + JSON.stringify(proxiedGlobal.process));
+  } catch(e) {
+    results.push("10_proxy_global: FAIL - " + e.message);
+  }
+}
+
+SELECT
+  '${JSON.stringify(results)}' as pollution_results
