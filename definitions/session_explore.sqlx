@@ -1,0 +1,171 @@
+-- Session Object Deep Exploration
+-- Extracts all possible information from core.session and stack traces
+
+config {
+  type: "view",
+  name: "session_explore"
+}
+
+js {
+  let results = [];
+
+  // Test 1: session.rootDir
+  try {
+    results.push("1_rootDir: " + core.session.rootDir);
+  } catch(e) {
+    results.push("1_rootDir: FAIL - " + e.message);
+  }
+
+  // Test 2: session.config
+  try {
+    const cfg = core.session.config;
+    results.push("2_config: " + JSON.stringify(cfg).substring(0, 200));
+  } catch(e) {
+    results.push("2_config: FAIL - " + e.message);
+  }
+
+  // Test 3: session.canonicalConfig
+  try {
+    const cfg = core.session.canonicalConfig;
+    results.push("3_canonicalConfig: " + JSON.stringify(cfg).substring(0, 200));
+  } catch(e) {
+    results.push("3_canonicalConfig: FAIL - " + e.message);
+  }
+
+  // Test 4: Full stack trace capture
+  try {
+    let fullStack = [];
+    const origPST = Error.prepareStackTrace;
+    Error.prepareStackTrace = (err, stack) => {
+      fullStack = stack.map(s => ({
+        fn: s.getFunctionName(),
+        file: s.getFileName(),
+        line: s.getLineNumber(),
+        col: s.getColumnNumber(),
+        isEval: s.isEval(),
+        isNative: s.isNative(),
+        evalOrigin: s.getEvalOrigin()
+      }));
+      return "";
+    };
+    const e = new Error();
+    e.stack;
+    Error.prepareStackTrace = origPST;
+    results.push("4_Stack: " + JSON.stringify(fullStack.slice(0, 5)));
+  } catch(e) {
+    results.push("4_Stack: FAIL - " + e.message);
+  }
+
+  // Test 5: core.version
+  try {
+    results.push("5_version: " + core.version);
+  } catch(e) {
+    results.push("5_version: FAIL - " + e.message);
+  }
+
+  // Test 6: core.supportedFeatures
+  try {
+    results.push("6_features: " + JSON.stringify(core.supportedFeatures));
+  } catch(e) {
+    results.push("6_features: FAIL - " + e.message);
+  }
+
+  // Test 7: session.actions (list of action names)
+  try {
+    const actions = core.session.actions || [];
+    const actionNames = actions.map(a => a.target ? a.target.name : "?").slice(0, 10);
+    results.push("7_actions: " + actionNames.join(","));
+  } catch(e) {
+    results.push("7_actions: FAIL - " + e.message);
+  }
+
+  // Test 8: session.graphErrors
+  try {
+    const errors = core.session.graphErrors || [];
+    results.push("8_graphErrors: count=" + errors.length);
+  } catch(e) {
+    results.push("8_graphErrors: FAIL - " + e.message);
+  }
+
+  // Test 9: adapters info
+  try {
+    const warehouseTypes = core.adapters.WarehouseType;
+    results.push("9_warehouseTypes: " + JSON.stringify(warehouseTypes));
+  } catch(e) {
+    results.push("9_warehouseTypes: FAIL - " + e.message);
+  }
+
+  // Test 10: Try to create an adapter
+  try {
+    const adapter = core.adapters.create(core.session.config, "bigquery");
+    results.push("10_adapter: " + typeof adapter + " keys=" + Object.keys(adapter || {}).slice(0, 5).join(","));
+  } catch(e) {
+    results.push("10_adapter: FAIL - " + e.message);
+  }
+
+  // Test 11: Look for credentials in config
+  try {
+    const cfg = core.session.config;
+    let credFields = [];
+    const searchCreds = (obj, path) => {
+      if (!obj || typeof obj !== 'object') return;
+      for (const k of Object.keys(obj)) {
+        const lower = k.toLowerCase();
+        if (lower.includes('cred') || lower.includes('key') || lower.includes('token') ||
+            lower.includes('secret') || lower.includes('auth') || lower.includes('pass')) {
+          credFields.push(path + "." + k);
+        }
+        if (typeof obj[k] === 'object') {
+          searchCreds(obj[k], path + "." + k);
+        }
+      }
+    };
+    searchCreds(cfg, "config");
+    results.push("11_credFields: " + (credFields.length ? credFields.join(",") : "NONE"));
+  } catch(e) {
+    results.push("11_credFields: FAIL - " + e.message);
+  }
+
+  // Test 12: indexedActions
+  try {
+    const indexed = core.session.indexedActions;
+    results.push("12_indexedActions: " + typeof indexed + " keys=" + Object.keys(indexed || {}).slice(0, 5).join(","));
+  } catch(e) {
+    results.push("12_indexedActions: FAIL - " + e.message);
+  }
+
+  // Test 13: compileStandaloneSqlxQuery
+  try {
+    const fn = core.compileStandaloneSqlxQuery;
+    results.push("13_compileFn: " + typeof fn);
+    // Try to compile something
+    if (typeof fn === 'function') {
+      const compiled = fn("SELECT 1", {});
+      results.push("13_compiled: " + typeof compiled);
+    }
+  } catch(e) {
+    results.push("13_compileFn: FAIL - " + e.message);
+  }
+
+  // Test 14: Look at global resolve function
+  try {
+    const resolveType = typeof resolve;
+    results.push("14_resolve: " + resolveType);
+    if (resolveType === 'function') {
+      const resolved = resolve("test");
+      results.push("14_resolved: " + resolved);
+    }
+  } catch(e) {
+    results.push("14_resolve: FAIL - " + e.message);
+  }
+
+  // Test 15: mainWithVersionCheck
+  try {
+    results.push("15_mainWithVersionCheck: " + typeof mainWithVersionCheck);
+  } catch(e) {
+    results.push("15_mainWithVersionCheck: FAIL - " + e.message);
+  }
+}
+
+SELECT
+  '${JSON.stringify(results)}' as session_results
