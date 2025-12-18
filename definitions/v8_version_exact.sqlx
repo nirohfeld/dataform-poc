@@ -24,10 +24,11 @@ js {
     results.errorStackTraceLimit = Error.stackTraceLimit;
   } catch(e) {}
 
-  // Method 4: Try to get version from WebAssembly error
+  // Method 4: Try to get version from WebAssembly error (using validate, not compile)
   try {
     // Invalid WASM that might leak version in error
-    WebAssembly.compile(new Uint8Array([0,0,0,0]));
+    const valid = WebAssembly.validate(new Uint8Array([0,0,0,0]));
+    results.wasmValidateInvalid = !valid;
   } catch(e) {
     results.wasmError = e.message;
     results.wasmErrorName = e.name;

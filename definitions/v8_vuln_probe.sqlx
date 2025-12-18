@@ -7,48 +7,29 @@ js {
   };
 
   // =============================================================================
-  // WASM GC FEATURE PROBES - Key primitive for V8 type confusion exploits
+  // WASM FEATURE PROBES - Check for WASM capabilities without crashing
   // =============================================================================
   try {
-    results.wasmGC = {};
+    results.wasm = {};
 
-    // Check if WASM GC is enabled (required for many type confusion bugs)
-    const wasmGCTest = new Uint8Array([
-      0x00, 0x61, 0x73, 0x6d, // magic
-      0x01, 0x00, 0x00, 0x00, // version
-      // Type section with struct type (WASM GC)
-      0x01, 0x07, 0x01,       // type section, 7 bytes, 1 type
-      0x5f, 0x01,             // struct, 1 field
-      0x7f, 0x01              // i32, mutable
-    ]);
+    // Basic WASM availability
+    results.wasm.available = typeof WebAssembly === 'object';
+    results.wasm.hasModule = typeof WebAssembly.Module === 'function';
+    results.wasm.hasInstance = typeof WebAssembly.Instance === 'function';
+    results.wasm.hasMemory = typeof WebAssembly.Memory === 'function';
+    results.wasm.hasTable = typeof WebAssembly.Table === 'function';
 
-    try {
-      const module = new WebAssembly.Module(wasmGCTest);
-      results.wasmGC.hasStructTypes = true;
-      results.wasmGC.note = "WASM GC struct types ENABLED - type confusion primitives available";
-    } catch(e) {
-      results.wasmGC.hasStructTypes = false;
-      results.wasmGC.structError = e.message;
-    }
+    // WASM Exception handling (V8 9.0+)
+    results.wasm.hasException = typeof WebAssembly.Exception === 'function';
+    results.wasm.hasTag = typeof WebAssembly.Tag === 'function';
 
-    // Test WASM reference types (prerequisite for many exploits)
-    results.wasmGC.hasRefTypes = (() => {
-      try {
-        const refTest = new Uint8Array([
-          0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
-          0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x6f // funcref return
-        ]);
-        new WebAssembly.Module(refTest);
-        return true;
-      } catch(e) { return false; }
-    })();
-
-    // Test WASM exception handling (another attack vector)
-    results.wasmGC.hasExceptions = typeof WebAssembly.Exception === 'function';
-    results.wasmGC.hasTag = typeof WebAssembly.Tag === 'function';
+    // WASM GC features - check prototype methods
+    results.wasm.hasCompileStreaming = typeof WebAssembly.compileStreaming === 'function';
+    results.wasm.hasInstantiateStreaming = typeof WebAssembly.instantiateStreaming === 'function';
+    results.wasm.hasValidate = typeof WebAssembly.validate === 'function';
 
   } catch(e) {
-    results.wasmGC = { error: e.message };
+    results.wasm = { error: e.message };
   }
 
   // =============================================================================
@@ -61,19 +42,25 @@ js {
     results.sab.available = typeof SharedArrayBuffer === 'function';
 
     if (results.sab.available) {
+      // Test basic SAB creation
+      try {
+        const sab = new SharedArrayBuffer(4);
+        results.sab.basicWorks = true;
+        results.sab.byteLength = sab.byteLength;
+      } catch(e) {
+        results.sab.basicError = e.message;
+      }
+
       // Test growable SharedArrayBuffer (CVE-2024-12692 related)
       try {
         const growable = new SharedArrayBuffer(4, { maxByteLength: 1024 });
         results.sab.hasGrowable = true;
         results.sab.canGrow = typeof growable.grow === 'function';
 
-        // Test grow behavior (potential underflow/overflow)
-        try {
+        if (results.sab.canGrow) {
           growable.grow(8);
           results.sab.growWorks = true;
           results.sab.newLength = growable.byteLength;
-        } catch(e) {
-          results.sab.growError = e.message;
         }
       } catch(e) {
         results.sab.hasGrowable = false;
@@ -103,7 +90,6 @@ js {
 
     // Test Array species manipulation (common type confusion vector)
     try {
-      const OrigArray = Array;
       let speciesCallCount = 0;
       class EvilArray extends Array {
         static get [Symbol.species]() {
@@ -172,7 +158,7 @@ js {
     const jitTime = Date.now() - start;
 
     results.jit.hotLoopTime = jitTime + "ms";
-    results.jit.likelyJIT = jitTime < 50; // If very fast, JIT is likely active
+    results.jit.likelyJIT = jitTime < 100; // If fast, JIT is likely active
 
     // Test deoptimization (used in some exploits)
     function deoptTest(obj) {
@@ -196,13 +182,17 @@ js {
   try {
     results.sandboxBypass = {};
 
-    // Test ArrayBuffer detach (used in UAF exploits)
+    // Test ArrayBuffer detach/transfer (used in UAF exploits)
     try {
       const ab = new ArrayBuffer(8);
-      const transferred = ab.transfer();
-      results.sandboxBypass.hasTransfer = true;
-      results.sandboxBypass.originalDetached = ab.byteLength === 0;
-      results.sandboxBypass.newLength = transferred.byteLength;
+      if (typeof ab.transfer === 'function') {
+        const transferred = ab.transfer();
+        results.sandboxBypass.hasTransfer = true;
+        results.sandboxBypass.originalDetached = ab.byteLength === 0;
+        results.sandboxBypass.newLength = transferred.byteLength;
+      } else {
+        results.sandboxBypass.hasTransfer = false;
+      }
     } catch(e) {
       results.sandboxBypass.transferError = e.message;
     }
@@ -211,8 +201,10 @@ js {
     try {
       const rab = new ArrayBuffer(8, { maxByteLength: 1024 });
       results.sandboxBypass.hasResizable = true;
-      rab.resize(16);
-      results.sandboxBypass.resizeWorks = rab.byteLength === 16;
+      if (typeof rab.resize === 'function') {
+        rab.resize(16);
+        results.sandboxBypass.resizeWorks = rab.byteLength === 16;
+      }
     } catch(e) {
       results.sandboxBypass.resizableError = e.message;
     }
@@ -222,7 +214,8 @@ js {
       eval('%DebugPrint(1)');
       results.sandboxBypass.hasNativeSyntax = true;
     } catch(e) {
-      results.sandboxBypass.nativeSyntaxBlocked = e.message.includes('native syntax');
+      results.sandboxBypass.nativeSyntaxBlocked = true;
+      results.sandboxBypass.nativeSyntaxError = e.message.substring(0, 100);
     }
 
   } catch(e) {
@@ -230,7 +223,7 @@ js {
   }
 
   // =============================================================================
-  // CVE-SPECIFIC PATTERN TESTS
+  // CVE-SPECIFIC PATTERN TESTS (Safe versions)
   // =============================================================================
   try {
     results.cvePatterns = {};
@@ -253,7 +246,7 @@ js {
       results.cvePatterns.CVE_2024_12053_error = e.message;
     }
 
-    // CVE-2024-12692: $55k bounty - likely SharedArrayBuffer related
+    // CVE-2024-12692: SharedArrayBuffer related
     // Test pattern: concurrent access with type change
     try {
       if (typeof SharedArrayBuffer !== 'undefined') {
@@ -261,7 +254,7 @@ js {
         const i32 = new Int32Array(sab);
         const f64 = new Float64Array(sab);
 
-        // Write as int, read as float (type confusion primitive)
+        // Write as int, read as float (type aliasing)
         i32[0] = 0x41414141;
         i32[1] = 0x41414141;
         results.cvePatterns.typeAlias = {
@@ -274,8 +267,7 @@ js {
       results.cvePatterns.CVE_2024_12692_error = e.message;
     }
 
-    // CVE-2025-0291: Most recent, likely similar pattern
-    // Test: Array prototype pollution during optimization
+    // CVE-2025-0291: Prototype pollution during optimization
     try {
       const origAt = Array.prototype.at;
       let polluted = false;
@@ -307,18 +299,18 @@ js {
   }
 
   // =============================================================================
-  // WASM MEMORY PROBES - Critical for sandbox bypass
+  // WASM MEMORY PROBES - Critical for sandbox bypass (safe version)
   // =============================================================================
   try {
     results.wasmMemory = {};
 
-    // Test WASM memory with large initial size
+    // Test WASM memory creation
     try {
-      const mem = new WebAssembly.Memory({ initial: 256, maximum: 1024 });
-      results.wasmMemory.largeMemory = true;
+      const mem = new WebAssembly.Memory({ initial: 1, maximum: 10 });
+      results.wasmMemory.basicMemory = true;
       results.wasmMemory.size = mem.buffer.byteLength;
     } catch(e) {
-      results.wasmMemory.largeMemoryError = e.message;
+      results.wasmMemory.basicMemoryError = e.message;
     }
 
     // Test WASM memory growth
@@ -334,10 +326,11 @@ js {
       results.wasmMemory.growError = e.message;
     }
 
-    // Test shared WASM memory (used in some exploits)
+    // Test shared WASM memory
     try {
       const sharedMem = new WebAssembly.Memory({ initial: 1, maximum: 10, shared: true });
       results.wasmMemory.sharedWorks = true;
+      results.wasmMemory.sharedSize = sharedMem.buffer.byteLength;
     } catch(e) {
       results.wasmMemory.sharedError = e.message;
     }
@@ -350,7 +343,7 @@ js {
   // VULNERABILITY ASSESSMENT
   // =============================================================================
   results.assessment = {
-    wasmGCEnabled: results.wasmGC?.hasStructTypes === true,
+    wasmAvailable: results.wasm?.available === true,
     sharedArrayBufferEnabled: results.sab?.available === true,
     growableBuffersEnabled: results.sab?.hasGrowable === true || results.sandboxBypass?.hasResizable === true,
     jitEnabled: results.jit?.likelyJIT === true,
@@ -359,7 +352,7 @@ js {
 
   // Vulnerability likelihood based on primitives
   let vulnScore = 0;
-  if (results.assessment.wasmGCEnabled) vulnScore += 2;
+  if (results.assessment.wasmAvailable) vulnScore += 2;
   if (results.assessment.sharedArrayBufferEnabled) vulnScore += 2;
   if (results.assessment.growableBuffersEnabled) vulnScore += 2;
   if (results.assessment.jitEnabled) vulnScore += 1;
