@@ -29,6 +29,14 @@ js {
     'node_modules/hardlink-test',
     'node_modules/hardlink-test/hardlink_config',
     'node_modules/hardlink-test/hardlink_attrs',
+
+    // Check for unicode-test package (unicode normalization bypass)
+    'node_modules/unicode-test',
+    'node_modules/unicode-test/package.json',
+    // Unicode paths - these use fullwidth/small dots that might normalize to ..
+    'node_modules/unicode-test/\uff0e\uff0e',  // Fullwidth dots
+    'node_modules/unicode-test/\u2024\u2024',  // One dot leader
+    'node_modules/unicode-test/\ufe52\ufe52',  // Small full stop
   ];
 
   for (const p of checkPaths) {
