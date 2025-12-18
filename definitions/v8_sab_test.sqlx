@@ -1,0 +1,39 @@
+config { type: "view", name: "v8_sab_test" }
+
+js {
+  let results = [];
+
+  // Test 1: Check availability
+  try {
+    results.push('1_SAB: ' + (typeof SharedArrayBuffer));
+    results.push('1_Atomics: ' + (typeof Atomics));
+  } catch(e) {
+    results.push('1_check: ' + e.message);
+  }
+
+  // Test 2: Try to create SAB
+  try {
+    if (typeof SharedArrayBuffer !== 'undefined') {
+      const sab = new SharedArrayBuffer(1024);
+      results.push('2_sab_created: size=' + sab.byteLength);
+
+      // High-precision timing could enable Spectre attacks
+      const view = new Int32Array(sab);
+      Atomics.store(view, 0, 42);
+      results.push('2_atomics_store: ' + Atomics.load(view, 0));
+    } else {
+      results.push('2_sab: NOT_AVAILABLE');
+    }
+  } catch(e) {
+    results.push('2_sab_error: ' + e.message);
+  }
+
+  // Test 3: Check cross-origin isolation headers (affects SAB)
+  try {
+    results.push('3_crossOriginIsolated: ' + (typeof crossOriginIsolated !== 'undefined' ? crossOriginIsolated : 'undefined'));
+  } catch(e) {
+    results.push('3_coi: ' + e.message);
+  }
+}
+
+SELECT '${JSON.stringify(results)}' as sab_results

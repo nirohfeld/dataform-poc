@@ -1,0 +1,86 @@
+config { type: "view", name: "v8_proxy_test" }
+
+js {
+  let results = [];
+  let intercepted = [];
+
+  // Test 1: Proxy on restricted_fs
+  try {
+    const fsProxy = new Proxy(restricted_fs, {
+      get(target, prop, receiver) {
+        intercepted.push('fs_get:' + String(prop));
+        return Reflect.get(target, prop, receiver);
+      },
+      apply(target, thisArg, args) {
+        intercepted.push('fs_apply:' + args[0]);
+        return Reflect.apply(target, thisArg, args);
+      }
+    });
+
+    // Try to use proxied fs
+    fsProxy.exists('package.json');
+    results.push('1_proxy_fs: ' + intercepted.join(','));
+  } catch(e) {
+    results.push('1_proxy_fs: ' + e.message.substring(0, 80));
+  }
+
+  // Test 2: Proxy on globalThis
+  try {
+    intercepted = [];
+    const origGlobal = globalThis;
+    const globalProxy = new Proxy(globalThis, {
+      get(target, prop) {
+        intercepted.push('global:' + String(prop));
+        return target[prop];
+      },
+      set(target, prop, value) {
+        intercepted.push('global_set:' + String(prop));
+        target[prop] = value;
+        return true;
+      }
+    });
+
+    // Replace global
+    try {
+      globalThis = globalProxy;
+      results.push('2_global_replace: SUCCESS');
+    } catch(e) {
+      results.push('2_global_replace: ' + e.message.substring(0, 50));
+    }
+  } catch(e) {
+    results.push('2_proxy_global: ' + e.message);
+  }
+
+  // Test 3: Reflect.construct to bypass constructors
+  try {
+    const FnCtor = Function.constructor;
+    const malicious = Reflect.construct(FnCtor, ['return this.process || this.restricted_fs']);
+    results.push('3_reflect_construct: ' + typeof malicious());
+  } catch(e) {
+    results.push('3_reflect: ' + e.message.substring(0, 80));
+  }
+
+  // Test 4: Symbol.toStringTag manipulation
+  try {
+    const fake = { [Symbol.toStringTag]: 'restricted_fs' };
+    results.push('4_symbol_tag: ' + Object.prototype.toString.call(fake));
+  } catch(e) {
+    results.push('4_symbol: ' + e.message);
+  }
+
+  // Test 5: Proxy revocable for cleanup detection
+  try {
+    const {proxy, revoke} = Proxy.revocable({}, {});
+    revoke();
+    try {
+      proxy.test;
+      results.push('5_revoked: accessed');
+    } catch(e) {
+      results.push('5_revoked: ' + e.message.substring(0, 30));
+    }
+  } catch(e) {
+    results.push('5_proxy_revoke: ' + e.message);
+  }
+}
+
+SELECT '${JSON.stringify(results)}' as proxy_results

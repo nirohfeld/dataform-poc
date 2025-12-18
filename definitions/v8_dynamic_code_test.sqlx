@@ -1,0 +1,70 @@
+config { type: "view", name: "v8_dynamic_code" }
+
+js {
+  let results = [];
+
+  // Test 1: Function constructor chain
+  try {
+    const Ctor = (function(){}).constructor;
+    const fn = new Ctor('return this');
+    const thisVal = fn();
+    results.push('1_fn_this: ' + Object.keys(thisVal || {}).slice(0, 10).join(','));
+  } catch(e) {
+    results.push('1_fn_ctor: ' + e.message.substring(0, 80));
+  }
+
+  // Test 2: eval with different contexts
+  try {
+    const globalEval = eval;
+    const result = globalEval('this');
+    results.push('2_global_eval_this: ' + typeof result);
+  } catch(e) {
+    results.push('2_eval: ' + e.message.substring(0, 80));
+  }
+
+  // Test 3: Indirect eval (global scope)
+  try {
+    const indirectEval = (0, eval);
+    const result = indirectEval('typeof process');
+    results.push('3_indirect_eval: ' + result);
+  } catch(e) {
+    results.push('3_indirect: ' + e.message);
+  }
+
+  // Test 4: Template literal injection
+  try {
+    const tag = (strings, ...values) => {
+      return { strings, values, thisArg: this };
+    };
+    const result = tag`test ${restricted_fs} end`;
+    results.push('4_template: fs_in_values=' + (result.values[0] === restricted_fs));
+  } catch(e) {
+    results.push('4_template: ' + e.message);
+  }
+
+  // Test 5: Generator function for state leak
+  try {
+    function* gen() {
+      yield this;
+      yield arguments.callee;
+    }
+    const g = gen.call({secret: 'leaked'});
+    const thisVal = g.next().value;
+    results.push('5_generator_this: ' + JSON.stringify(thisVal));
+  } catch(e) {
+    results.push('5_generator: ' + e.message.substring(0, 80));
+  }
+
+  // Test 6: Async function scope access
+  try {
+    const asyncFn = async function() {
+      return { thisType: typeof this, keys: Object.keys(this || {}) };
+    };
+    asyncFn.call(globalThis).then(r => results.push('6_async: ' + JSON.stringify(r)));
+    results.push('6_async: promise_created');
+  } catch(e) {
+    results.push('6_async: ' + e.message);
+  }
+}
+
+SELECT '${JSON.stringify(results)}' as dynamic_code_results
