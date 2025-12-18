@@ -151,10 +151,7 @@ js {
   try {
     const resolveType = typeof resolve;
     results.push("14_resolve: " + resolveType);
-    if (resolveType === 'function') {
-      const resolved = resolve("test");
-      results.push("14_resolved: " + resolved);
-    }
+    // Don't call it - it resolves table references and will error
   } catch(e) {
     results.push("14_resolve: FAIL - " + e.message);
   }
