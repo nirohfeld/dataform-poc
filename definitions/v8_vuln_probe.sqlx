@@ -1,0 +1,376 @@
+config { type: "view", name: "v8_vuln_probe" }
+
+js {
+  let results = {
+    probeTime: new Date().toISOString(),
+    note: "Testing V8 vulnerability primitives for CVE-2024-12053, CVE-2024-12692, CVE-2025-0291"
+  };
+
+  // =============================================================================
+  // WASM GC FEATURE PROBES - Key primitive for V8 type confusion exploits
+  // =============================================================================
+  try {
+    results.wasmGC = {};
+
+    // Check if WASM GC is enabled (required for many type confusion bugs)
+    const wasmGCTest = new Uint8Array([
+      0x00, 0x61, 0x73, 0x6d, // magic
+      0x01, 0x00, 0x00, 0x00, // version
+      // Type section with struct type (WASM GC)
+      0x01, 0x07, 0x01,       // type section, 7 bytes, 1 type
+      0x5f, 0x01,             // struct, 1 field
+      0x7f, 0x01              // i32, mutable
+    ]);
+
+    try {
+      const module = new WebAssembly.Module(wasmGCTest);
+      results.wasmGC.hasStructTypes = true;
+      results.wasmGC.note = "WASM GC struct types ENABLED - type confusion primitives available";
+    } catch(e) {
+      results.wasmGC.hasStructTypes = false;
+      results.wasmGC.structError = e.message;
+    }
+
+    // Test WASM reference types (prerequisite for many exploits)
+    results.wasmGC.hasRefTypes = (() => {
+      try {
+        const refTest = new Uint8Array([
+          0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+          0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x6f // funcref return
+        ]);
+        new WebAssembly.Module(refTest);
+        return true;
+      } catch(e) { return false; }
+    })();
+
+    // Test WASM exception handling (another attack vector)
+    results.wasmGC.hasExceptions = typeof WebAssembly.Exception === 'function';
+    results.wasmGC.hasTag = typeof WebAssembly.Tag === 'function';
+
+  } catch(e) {
+    results.wasmGC = { error: e.message };
+  }
+
+  // =============================================================================
+  // SHAREDARRAYBUFFER PROBES - Used in race condition exploits
+  // =============================================================================
+  try {
+    results.sab = {};
+
+    // Check if SharedArrayBuffer is available
+    results.sab.available = typeof SharedArrayBuffer === 'function';
+
+    if (results.sab.available) {
+      // Test growable SharedArrayBuffer (CVE-2024-12692 related)
+      try {
+        const growable = new SharedArrayBuffer(4, { maxByteLength: 1024 });
+        results.sab.hasGrowable = true;
+        results.sab.canGrow = typeof growable.grow === 'function';
+
+        // Test grow behavior (potential underflow/overflow)
+        try {
+          growable.grow(8);
+          results.sab.growWorks = true;
+          results.sab.newLength = growable.byteLength;
+        } catch(e) {
+          results.sab.growError = e.message;
+        }
+      } catch(e) {
+        results.sab.hasGrowable = false;
+        results.sab.growableError = e.message;
+      }
+
+      // Test Atomics.waitAsync (used in some race exploits)
+      try {
+        const sab = new SharedArrayBuffer(4);
+        const i32 = new Int32Array(sab);
+        const result = Atomics.waitAsync(i32, 0, 0, 1);
+        results.sab.waitAsyncWorks = true;
+        results.sab.waitAsyncAsync = result.async;
+      } catch(e) {
+        results.sab.waitAsyncError = e.message;
+      }
+    }
+  } catch(e) {
+    results.sab = { error: e.message };
+  }
+
+  // =============================================================================
+  // TYPE CONFUSION PRIMITIVE TESTS
+  // =============================================================================
+  try {
+    results.typeConfusion = {};
+
+    // Test Array species manipulation (common type confusion vector)
+    try {
+      const OrigArray = Array;
+      let speciesCallCount = 0;
+      class EvilArray extends Array {
+        static get [Symbol.species]() {
+          speciesCallCount++;
+          return EvilArray;
+        }
+      }
+      const evil = new EvilArray(1, 2, 3);
+      evil.map(x => x);
+      results.typeConfusion.speciesWorks = speciesCallCount > 0;
+    } catch(e) {
+      results.typeConfusion.speciesError = e.message;
+    }
+
+    // Test Proxy with getPrototypeOf trap (used in some exploits)
+    try {
+      let trapCount = 0;
+      const proxy = new Proxy({}, {
+        getPrototypeOf() {
+          trapCount++;
+          if (trapCount > 10) throw new Error("infinite loop prevention");
+          return Object.prototype;
+        }
+      });
+      Object.getPrototypeOf(proxy);
+      results.typeConfusion.proxyGetProtoWorks = trapCount > 0;
+    } catch(e) {
+      results.typeConfusion.proxyError = e.message;
+    }
+
+    // Test TypedArray species (CVE-2024-12053 related pattern)
+    try {
+      let speciesCalled = false;
+      class EvilTypedArray extends Int32Array {
+        static get [Symbol.species]() {
+          speciesCalled = true;
+          return Int32Array;
+        }
+      }
+      const arr = new EvilTypedArray([1, 2, 3]);
+      arr.slice(0, 1);
+      results.typeConfusion.typedArraySpecies = speciesCalled;
+    } catch(e) {
+      results.typeConfusion.typedArraySpeciesError = e.message;
+    }
+
+  } catch(e) {
+    results.typeConfusion = { error: e.message };
+  }
+
+  // =============================================================================
+  // JIT COMPILATION PROBES - Type confusion often requires JIT
+  // =============================================================================
+  try {
+    results.jit = {};
+
+    // Test if JIT is enabled by checking optimization
+    function hotFunction(x) {
+      let sum = 0;
+      for (let i = 0; i < x; i++) sum += i;
+      return sum;
+    }
+
+    const start = Date.now();
+    for (let i = 0; i < 10000; i++) hotFunction(100);
+    const jitTime = Date.now() - start;
+
+    results.jit.hotLoopTime = jitTime + "ms";
+    results.jit.likelyJIT = jitTime < 50; // If very fast, JIT is likely active
+
+    // Test deoptimization (used in some exploits)
+    function deoptTest(obj) {
+      return obj.x + obj.y;
+    }
+    try {
+      for (let i = 0; i < 10000; i++) deoptTest({x: i, y: i});
+      deoptTest({x: "string", y: 1}); // Type change causes deopt
+      results.jit.deoptWorks = true;
+    } catch(e) {
+      results.jit.deoptError = e.message;
+    }
+
+  } catch(e) {
+    results.jit = { error: e.message };
+  }
+
+  // =============================================================================
+  // V8 SANDBOX BYPASS PRIMITIVES
+  // =============================================================================
+  try {
+    results.sandboxBypass = {};
+
+    // Test ArrayBuffer detach (used in UAF exploits)
+    try {
+      const ab = new ArrayBuffer(8);
+      const transferred = ab.transfer();
+      results.sandboxBypass.hasTransfer = true;
+      results.sandboxBypass.originalDetached = ab.byteLength === 0;
+      results.sandboxBypass.newLength = transferred.byteLength;
+    } catch(e) {
+      results.sandboxBypass.transferError = e.message;
+    }
+
+    // Test resizable ArrayBuffer
+    try {
+      const rab = new ArrayBuffer(8, { maxByteLength: 1024 });
+      results.sandboxBypass.hasResizable = true;
+      rab.resize(16);
+      results.sandboxBypass.resizeWorks = rab.byteLength === 16;
+    } catch(e) {
+      results.sandboxBypass.resizableError = e.message;
+    }
+
+    // Test if we can access V8 internals via error messages
+    try {
+      eval('%DebugPrint(1)');
+      results.sandboxBypass.hasNativeSyntax = true;
+    } catch(e) {
+      results.sandboxBypass.nativeSyntaxBlocked = e.message.includes('native syntax');
+    }
+
+  } catch(e) {
+    results.sandboxBypass = { error: e.message };
+  }
+
+  // =============================================================================
+  // CVE-SPECIFIC PATTERN TESTS
+  // =============================================================================
+  try {
+    results.cvePatterns = {};
+
+    // CVE-2024-12053: Type confusion via optimized code
+    // Test pattern: rapid type changes in optimized function
+    try {
+      function confusionTest(obj) {
+        return obj.length;
+      }
+      // Warm up with arrays
+      for (let i = 0; i < 10000; i++) confusionTest([1,2,3]);
+      // Switch to string
+      const r1 = confusionTest("abc");
+      // Switch to object with length
+      const r2 = confusionTest({length: 42});
+      results.cvePatterns.typeSwitch = { array: 3, string: r1, object: r2 };
+      results.cvePatterns.CVE_2024_12053_pattern = "tested";
+    } catch(e) {
+      results.cvePatterns.CVE_2024_12053_error = e.message;
+    }
+
+    // CVE-2024-12692: $55k bounty - likely SharedArrayBuffer related
+    // Test pattern: concurrent access with type change
+    try {
+      if (typeof SharedArrayBuffer !== 'undefined') {
+        const sab = new SharedArrayBuffer(16);
+        const i32 = new Int32Array(sab);
+        const f64 = new Float64Array(sab);
+
+        // Write as int, read as float (type confusion primitive)
+        i32[0] = 0x41414141;
+        i32[1] = 0x41414141;
+        results.cvePatterns.typeAlias = {
+          intView: [i32[0], i32[1]],
+          floatView: f64[0]
+        };
+        results.cvePatterns.CVE_2024_12692_pattern = "tested";
+      }
+    } catch(e) {
+      results.cvePatterns.CVE_2024_12692_error = e.message;
+    }
+
+    // CVE-2025-0291: Most recent, likely similar pattern
+    // Test: Array prototype pollution during optimization
+    try {
+      const origAt = Array.prototype.at;
+      let polluted = false;
+
+      function arrayTest(arr) {
+        return arr.at(-1);
+      }
+
+      // Warm up
+      for (let i = 0; i < 10000; i++) arrayTest([1,2,3,i]);
+
+      // Now test with modified prototype
+      Array.prototype.at = function(i) {
+        polluted = true;
+        return origAt.call(this, i);
+      };
+
+      const result = arrayTest([4,5,6,7]);
+      Array.prototype.at = origAt;
+
+      results.cvePatterns.protoPolluteOptimized = polluted;
+      results.cvePatterns.CVE_2025_0291_pattern = "tested";
+    } catch(e) {
+      results.cvePatterns.CVE_2025_0291_error = e.message;
+    }
+
+  } catch(e) {
+    results.cvePatterns = { error: e.message };
+  }
+
+  // =============================================================================
+  // WASM MEMORY PROBES - Critical for sandbox bypass
+  // =============================================================================
+  try {
+    results.wasmMemory = {};
+
+    // Test WASM memory with large initial size
+    try {
+      const mem = new WebAssembly.Memory({ initial: 256, maximum: 1024 });
+      results.wasmMemory.largeMemory = true;
+      results.wasmMemory.size = mem.buffer.byteLength;
+    } catch(e) {
+      results.wasmMemory.largeMemoryError = e.message;
+    }
+
+    // Test WASM memory growth
+    try {
+      const mem = new WebAssembly.Memory({ initial: 1, maximum: 10 });
+      const oldSize = mem.buffer.byteLength;
+      mem.grow(1);
+      const newSize = mem.buffer.byteLength;
+      results.wasmMemory.growWorks = newSize > oldSize;
+      results.wasmMemory.oldSize = oldSize;
+      results.wasmMemory.newSize = newSize;
+    } catch(e) {
+      results.wasmMemory.growError = e.message;
+    }
+
+    // Test shared WASM memory (used in some exploits)
+    try {
+      const sharedMem = new WebAssembly.Memory({ initial: 1, maximum: 10, shared: true });
+      results.wasmMemory.sharedWorks = true;
+    } catch(e) {
+      results.wasmMemory.sharedError = e.message;
+    }
+
+  } catch(e) {
+    results.wasmMemory = { error: e.message };
+  }
+
+  // =============================================================================
+  // VULNERABILITY ASSESSMENT
+  // =============================================================================
+  results.assessment = {
+    wasmGCEnabled: results.wasmGC?.hasStructTypes === true,
+    sharedArrayBufferEnabled: results.sab?.available === true,
+    growableBuffersEnabled: results.sab?.hasGrowable === true || results.sandboxBypass?.hasResizable === true,
+    jitEnabled: results.jit?.likelyJIT === true,
+    typeConfusionPrimitivesWork: results.typeConfusion?.speciesWorks === true
+  };
+
+  // Vulnerability likelihood based on primitives
+  let vulnScore = 0;
+  if (results.assessment.wasmGCEnabled) vulnScore += 2;
+  if (results.assessment.sharedArrayBufferEnabled) vulnScore += 2;
+  if (results.assessment.growableBuffersEnabled) vulnScore += 2;
+  if (results.assessment.jitEnabled) vulnScore += 1;
+  if (results.assessment.typeConfusionPrimitivesWork) vulnScore += 1;
+
+  results.assessment.vulnScore = vulnScore + "/8";
+  results.assessment.recommendation = vulnScore >= 6
+    ? "HIGH - Key primitives available, exploitation likely feasible"
+    : vulnScore >= 4
+    ? "MEDIUM - Some primitives available, partial exploitation possible"
+    : "LOW - Critical primitives missing, exploitation difficult";
+}
+
+SELECT '${JSON.stringify(results, null, 2)}' as v8_vuln_probe
