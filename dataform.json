@@ -1,7 +1,7 @@
 {
   "defaultSchema": "dataform_poc",
   "assertionSchema": "dataform_assertions",
-  "warehouse": "redshift",
+  "warehouse": "bigquery",
   "defaultDatabase": "your-gcp-project",
   "defaultLocation": "US"
 }
