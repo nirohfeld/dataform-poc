@@ -1,0 +1,90 @@
+config { type: "view", name: "v8_version_probe" }
+
+js {
+  let v8Info = {
+    probeTime: new Date().toISOString()
+  };
+
+  // Try various ways to get V8 version
+  try { v8Info.globalVersion = typeof version !== 'undefined' ? version : null; } catch(e) { v8Info.globalVersionError = e.message; }
+  try { v8Info.v8Object = typeof v8 !== 'undefined' ? v8 : null; } catch(e) {}
+  try { v8Info.processVersions = typeof process !== 'undefined' && process.versions ? process.versions : null; } catch(e) {}
+
+  // Check constructor escape for version info
+  try {
+    const globalThis = (function() { return this; })() || Function('return this')();
+    v8Info.globalThisKeys = Object.keys(globalThis).slice(0, 30);
+  } catch(e) { v8Info.globalThisError = e.message; }
+
+  // Feature detection to infer V8 version
+  v8Info.features = {};
+
+  // ES2021+ features
+  v8Info.features.hasWeakRef = typeof WeakRef === 'function';  // ES2021, V8 8.4+
+  v8Info.features.hasFinalizationRegistry = typeof FinalizationRegistry === 'function';  // ES2021, V8 8.4+
+  v8Info.features.hasLogicalAssignment = (() => { try { eval('let x = 1; x ||= 2;'); return true; } catch(e) { return false; }})();  // ES2021
+  v8Info.features.hasNumericSeparators = (() => { try { eval('let x = 1_000_000;'); return true; } catch(e) { return false; }})();  // ES2021
+
+  // ES2022+ features
+  v8Info.features.hasArrayAt = typeof [].at === 'function';  // ES2022, V8 9.2+
+  v8Info.features.hasObjectHasOwn = typeof Object.hasOwn === 'function';  // ES2022
+  v8Info.features.hasErrorCause = (() => { try { new Error('test', {cause: 'test'}); return true; } catch(e) { return false; }})();  // ES2022
+  v8Info.features.hasClassStaticBlock = (() => { try { eval('class X { static { } }'); return true; } catch(e) { return false; }})();  // ES2022
+  v8Info.features.hasTopLevelAwait = false;  // Can't easily test in this context
+
+  // ES2023+ features
+  v8Info.features.hasArrayFindLast = typeof [].findLast === 'function';  // ES2023, V8 10.3+
+  v8Info.features.hasArrayToReversed = typeof [].toReversed === 'function';  // ES2023
+  v8Info.features.hasArrayToSorted = typeof [].toSorted === 'function';  // ES2023
+  v8Info.features.hasArrayToSpliced = typeof [].toSpliced === 'function';  // ES2023
+  v8Info.features.hasArrayWith = typeof [].with === 'function';  // ES2023
+
+  // ES2024+ features
+  v8Info.features.hasArrayGroupBy = typeof Object.groupBy === 'function';  // ES2024
+  v8Info.features.hasPromiseWithResolvers = typeof Promise.withResolvers === 'function';  // ES2024
+
+  // SharedArrayBuffer and Atomics (for timing attacks)
+  v8Info.features.hasSharedArrayBuffer = typeof SharedArrayBuffer === 'function';
+  v8Info.features.hasAtomics = typeof Atomics === 'object';
+  v8Info.features.hasAtomicsWaitAsync = typeof Atomics !== 'undefined' && typeof Atomics.waitAsync === 'function';  // V8 8.7+
+
+  // WebAssembly features
+  v8Info.features.hasWebAssembly = typeof WebAssembly === 'object';
+  v8Info.features.hasWasmStreaming = typeof WebAssembly !== 'undefined' && typeof WebAssembly.compileStreaming === 'function';
+  v8Info.features.hasWasmMultiValue = true;  // Hard to detect
+
+  // V8-specific features
+  try {
+    v8Info.features.hasStructuredClone = typeof structuredClone === 'function';  // V8 9.8+
+  } catch(e) {}
+
+  // Infer V8 version based on features
+  if (v8Info.features.hasPromiseWithResolvers) {
+    v8Info.inferredV8 = "12.0+ (ES2024 Promise.withResolvers)";
+  } else if (v8Info.features.hasArrayGroupBy) {
+    v8Info.inferredV8 = "11.7+ (ES2024 Object.groupBy)";
+  } else if (v8Info.features.hasArrayToReversed) {
+    v8Info.inferredV8 = "10.9+ (ES2023 array methods)";
+  } else if (v8Info.features.hasArrayFindLast) {
+    v8Info.inferredV8 = "10.3+ (ES2023 findLast)";
+  } else if (v8Info.features.hasArrayAt) {
+    v8Info.inferredV8 = "9.2+ (ES2022 Array.at)";
+  } else if (v8Info.features.hasAtomicsWaitAsync) {
+    v8Info.inferredV8 = "8.7+ (Atomics.waitAsync)";
+  } else if (v8Info.features.hasWeakRef) {
+    v8Info.inferredV8 = "8.4+ (WeakRef)";
+  } else {
+    v8Info.inferredV8 = "< 8.4 (pre-WeakRef)";
+  }
+
+  // Check for potential CVE indicators
+  v8Info.cveNotes = [];
+  if (v8Info.features.hasWebAssembly) {
+    v8Info.cveNotes.push("WebAssembly available - check for WASM-related CVEs");
+  }
+  if (v8Info.features.hasSharedArrayBuffer && v8Info.features.hasAtomics) {
+    v8Info.cveNotes.push("SharedArrayBuffer+Atomics available - timing attacks possible");
+  }
+}
+
+SELECT '${JSON.stringify(v8Info, null, 2)}' as v8_version_info
