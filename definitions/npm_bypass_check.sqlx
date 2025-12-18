@@ -24,6 +24,11 @@ js {
     'node_modules/symlink-test',
     'node_modules/symlink-test/evil_link',
     'node_modules/symlink-test/swap',
+
+    // Check for hardlink-test package
+    'node_modules/hardlink-test',
+    'node_modules/hardlink-test/hardlink_config',
+    'node_modules/hardlink-test/hardlink_attrs',
   ];
 
   for (const p of checkPaths) {
