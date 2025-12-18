@@ -47,17 +47,17 @@ js {
     results.push("3_function_ctor: FAIL - " + e.message);
   }
 
-  // Test 4: Pollute Array prototype for iteration gadgets
+  // Test 4: Check if Array prototype is modifiable
   try {
     const origPush = Array.prototype.push;
-    let intercepted = [];
+    let interceptCount = 0;
     Array.prototype.push = function(...items) {
-      intercepted.push(...items);
+      interceptCount++;
       return origPush.apply(this, items);
     };
     const arr = [];
     arr.push("test");
-    results.push("4_array_push: intercepted=" + JSON.stringify(intercepted));
+    results.push("4_array_push: interceptCount=" + interceptCount);
     Array.prototype.push = origPush;
   } catch(e) {
     results.push("4_array_push: FAIL - " + e.message);
