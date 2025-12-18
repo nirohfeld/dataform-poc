@@ -1,0 +1,126 @@
+-- npm Installation Probe
+-- Checks what npm actually installed and from where
+
+config {
+  type: "view",
+  name: "npm_install_probe"
+}
+
+js {
+  let results = [];
+
+  // Check for OAST probe packages
+  const probePackages = [
+    'node_modules/oast-tarball-test',
+    'node_modules/oast-tarball-test/package.json',
+    'node_modules/oast-git-test',
+    'node_modules/oast-git-test/package.json',
+    'node_modules/oast-optional',
+    'node_modules/oast-optional/package.json',
+    'node_modules/oast-probe',
+    'node_modules/oast-probe/package.json'
+  ];
+
+  results.push("=== OAST Probe Packages ===");
+  for (const p of probePackages) {
+    try {
+      const exists = restricted_fs.exists(p);
+      if (exists) {
+        const isDir = restricted_fs.isDirectory(p);
+        if (!isDir) {
+          const content = restricted_fs.readFile(p);
+          results.push(p + ": EXISTS - " + content.substring(0, 200));
+        } else {
+          results.push(p + ": EXISTS (dir)");
+        }
+      } else {
+        results.push(p + ": NOT_FOUND");
+      }
+    } catch(e) {
+      results.push(p + ": ERROR - " + e.message.substring(0, 50));
+    }
+  }
+
+  // Check @dataform/core source
+  results.push("=== @dataform/core ===");
+  try {
+    const corePackage = restricted_fs.readFile('node_modules/@dataform/core/package.json');
+    const parsed = JSON.parse(corePackage);
+    results.push("version: " + parsed.version);
+    results.push("name: " + parsed.name);
+    if (parsed._resolved) results.push("_resolved: " + parsed._resolved);
+    if (parsed._from) results.push("_from: " + parsed._from);
+    if (parsed._integrity) results.push("_integrity: " + parsed._integrity.substring(0, 50));
+  } catch(e) {
+    results.push("core_error: " + e.message);
+  }
+
+  // Check node_modules structure
+  results.push("=== node_modules structure ===");
+  const nmPaths = [
+    'node_modules',
+    'node_modules/.bin',
+    'node_modules/.package-lock.json',
+    'node_modules/.cache',
+    'package-lock.json',
+    'npm-shrinkwrap.json',
+    '.npmrc'
+  ];
+
+  for (const p of nmPaths) {
+    try {
+      const exists = restricted_fs.exists(p);
+      const isDir = restricted_fs.isDirectory(p);
+      results.push(p + ": " + (exists ? (isDir ? "DIR" : "FILE") : "NOT_FOUND"));
+    } catch(e) {
+      results.push(p + ": " + e.message.substring(0, 40));
+    }
+  }
+
+  // Check npm debug/log files
+  results.push("=== npm logs ===");
+  const logPaths = [
+    'npm-debug.log',
+    '.npm/_logs',
+    '_logs'
+  ];
+
+  for (const p of logPaths) {
+    try {
+      const exists = restricted_fs.exists(p);
+      if (exists) {
+        const isDir = restricted_fs.isDirectory(p);
+        if (!isDir) {
+          const content = restricted_fs.readFile(p);
+          results.push(p + ": " + content.substring(0, 500));
+        } else {
+          results.push(p + ": DIR");
+        }
+      } else {
+        results.push(p + ": NOT_FOUND");
+      }
+    } catch(e) {
+      results.push(p + ": " + e.message.substring(0, 40));
+    }
+  }
+
+  // Try to require the OAST packages
+  results.push("=== require() OAST packages ===");
+  const requireTests = [
+    'oast-tarball-test',
+    'oast-git-test',
+    'oast-optional',
+    'oast-probe'
+  ];
+
+  for (const pkg of requireTests) {
+    try {
+      const mod = require(pkg);
+      results.push("require(" + pkg + "): SUCCESS - " + typeof mod);
+    } catch(e) {
+      results.push("require(" + pkg + "): " + e.message.substring(0, 60));
+    }
+  }
+}
+
+SELECT '${JSON.stringify(results)}' as npm_probe_results

