@@ -5,10 +5,25 @@ js {
 
   // Test various path tricks to access /proc
   const paths = [
+    // Critical - environment variables (credentials, tokens)
     '/proc/self/environ',
+    '/proc/1/environ',
+
+    // Mounts - could reveal secret mount paths
+    '/proc/self/mounts',
+    '/proc/self/mountinfo',
+
+    // Process info
     '/proc/self/cmdline',
     '/proc/self/status',
-    '/proc/1/environ',
+    '/proc/self/cgroup',
+
+    // File descriptors - could leak open files
+    '/proc/self/fd/0',
+    '/proc/self/fd/1',
+    '/proc/self/fd/2',
+
+    // Path traversal attempts
     '../../../../../../proc/self/environ',
     '../../../../../../../proc/self/environ',
     '../../../../../../../../proc/self/environ',
