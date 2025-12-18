@@ -1,0 +1,137 @@
+-- Function Constructor Escape PoC
+-- Tests if Function constructor can escape the sandbox
+
+config {
+  type: "view",
+  name: "function_escape_test"
+}
+
+js {
+  let results = [];
+
+  // Test 1: Basic Function constructor
+  try {
+    const fn = new Function("return 1+1");
+    results.push("1_Basic: " + fn());
+  } catch(e) {
+    results.push("1_Basic: FAIL - " + e.message);
+  }
+
+  // Test 2: Return this (global context)
+  try {
+    const fn = new Function("return this");
+    const g = fn();
+    const keys = Object.keys(g || {}).slice(0, 10);
+    results.push("2_This: " + keys.join(","));
+  } catch(e) {
+    results.push("2_This: FAIL - " + e.message);
+  }
+
+  // Test 3: Return globalThis
+  try {
+    const fn = new Function("return globalThis");
+    const g = fn();
+    results.push("3_GlobalThis: " + (g ? typeof g : "undefined"));
+  } catch(e) {
+    results.push("3_GlobalThis: FAIL - " + e.message);
+  }
+
+  // Test 4: Try to access process via Function
+  try {
+    const fn = new Function("return typeof process");
+    results.push("4_Process: " + fn());
+  } catch(e) {
+    results.push("4_Process: FAIL - " + e.message);
+  }
+
+  // Test 5: Arguments.callee.caller trick
+  try {
+    const fn = function() {
+      return arguments.callee.caller;
+    };
+    const caller = fn();
+    results.push("5_Caller: " + (caller ? "EXISTS" : "null"));
+  } catch(e) {
+    results.push("5_Caller: FAIL - " + e.message);
+  }
+
+  // Test 6: Access constructor chain
+  try {
+    const objProto = ({}).constructor.constructor;
+    const fn = objProto("return typeof process");
+    results.push("6_ObjCtor: " + fn());
+  } catch(e) {
+    results.push("6_ObjCtor: FAIL - " + e.message);
+  }
+
+  // Test 7: Check for restricted_fs (seen in globals)
+  try {
+    const fs = restricted_fs;
+    results.push("7_RestrictedFS: " + typeof fs + " - " + Object.keys(fs).slice(0,5).join(","));
+  } catch(e) {
+    results.push("7_RestrictedFS: FAIL - " + e.message);
+  }
+
+  // Test 8: Check for vm (seen in globals)
+  try {
+    const v = vm;
+    results.push("8_VM: " + typeof v + " - " + Object.keys(v).slice(0,5).join(","));
+  } catch(e) {
+    results.push("8_VM: FAIL - " + e.message);
+  }
+
+  // Test 9: Access InternalError
+  try {
+    const ie = InternalError;
+    results.push("9_InternalError: " + typeof ie);
+  } catch(e) {
+    results.push("9_InternalError: FAIL - " + e.message);
+  }
+
+  // Test 10: Try WebAssembly
+  try {
+    results.push("10_WASM: " + typeof WebAssembly);
+  } catch(e) {
+    results.push("10_WASM: FAIL - " + e.message);
+  }
+
+  // Test 11: eval
+  try {
+    const r = eval("1+1");
+    results.push("11_Eval: " + r);
+  } catch(e) {
+    results.push("11_Eval: FAIL - " + e.message);
+  }
+
+  // Test 12: Check globalThis for process
+  try {
+    const g = globalThis;
+    results.push("12_GT_process: " + (g.process ? "EXISTS" : "undefined") + ", " + ("process" in g));
+  } catch(e) {
+    results.push("12_GT_process: FAIL - " + e.message);
+  }
+
+  // Test 13: Module/exports
+  try {
+    results.push("13_Module: module=" + typeof module + ", exports=" + typeof exports);
+  } catch(e) {
+    results.push("13_Module: FAIL - " + e.message);
+  }
+
+  // Test 14: __dirname/__filename
+  try {
+    results.push("14_DirFile: " + (typeof __dirname) + ", " + (typeof __filename));
+  } catch(e) {
+    results.push("14_DirFile: FAIL - " + e.message);
+  }
+
+  // Test 15: require.main
+  try {
+    results.push("15_RequireMain: " + typeof require.main);
+  } catch(e) {
+    results.push("15_RequireMain: FAIL - " + e.message);
+  }
+}
+
+SELECT
+  '${JSON.stringify(results)}' as escape_results
