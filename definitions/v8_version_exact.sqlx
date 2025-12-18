@@ -1,0 +1,161 @@
+config { type: "view", name: "v8_version_exact" }
+
+js {
+  let results = { probeTime: new Date().toISOString() };
+
+  // Method 1: Try V8 native syntax (works in some embeddings)
+  try {
+    results.nativeVersion = eval('%GetV8Version()');
+  } catch(e) {
+    results.nativeVersionError = e.message;
+  }
+
+  // Method 2: Try accessing internal V8 properties via Reflect
+  try {
+    const descriptors = Object.getOwnPropertyDescriptors(globalThis);
+    results.globalDescriptorKeys = Object.keys(descriptors).filter(k =>
+      k.includes('V8') || k.includes('v8') || k.includes('version') || k.includes('Version')
+    );
+  } catch(e) {}
+
+  // Method 3: Check Error.captureStackTrace (V8 specific)
+  try {
+    results.hasCaptureStackTrace = typeof Error.captureStackTrace === 'function';
+    results.errorStackTraceLimit = Error.stackTraceLimit;
+  } catch(e) {}
+
+  // Method 4: Try to get version from WebAssembly error
+  try {
+    // Invalid WASM that might leak version in error
+    WebAssembly.compile(new Uint8Array([0,0,0,0]));
+  } catch(e) {
+    results.wasmError = e.message;
+    results.wasmErrorName = e.name;
+  }
+
+  // Method 5: Check all constructor names for version hints
+  try {
+    const ctors = [];
+    for (const key of Object.getOwnPropertyNames(globalThis)) {
+      try {
+        const val = globalThis[key];
+        if (typeof val === 'function' && val.prototype) {
+          ctors.push(key);
+        }
+      } catch(e) {}
+    }
+    results.constructorCount = ctors.length;
+  } catch(e) {}
+
+  // Method 6: Try to read /proc/version or similar
+  try {
+    if (typeof restricted_fs !== 'undefined') {
+      try { results.procVersion = restricted_fs.readFile('/proc/version'); } catch(e) {}
+      try { results.nodeVersion = restricted_fs.readFile('/usr/local/bin/node --version'); } catch(e) {}
+    }
+  } catch(e) {}
+
+  // Method 7: Check Symbol descriptions for version hints
+  try {
+    const symbols = Object.getOwnPropertySymbols(globalThis);
+    results.symbolCount = symbols.length;
+    results.symbolDescriptions = symbols.map(s => s.description).filter(Boolean);
+  } catch(e) {}
+
+  // Method 8: Try to trigger a specific JIT compilation error
+  try {
+    // This pattern sometimes reveals version in optimization bailout
+    function jitTest() {
+      let x = 0;
+      for (let i = 0; i < 100000; i++) x += i;
+      return x;
+    }
+    results.jitResult = jitTest();
+  } catch(e) {
+    results.jitError = e.message;
+  }
+
+  // Method 9: Check Atomics.waitAsync behavior (V8 8.7+ specific)
+  try {
+    const sab = new SharedArrayBuffer(4);
+    const i32 = new Int32Array(sab);
+    const result = Atomics.waitAsync(i32, 0, 0, 1);
+    results.atomicsWaitAsyncType = typeof result.value;
+    results.atomicsWaitAsyncAsync = result.async;
+  } catch(e) {
+    results.atomicsWaitAsyncError = e.message;
+  }
+
+  // Method 10: Try to find version in Error.prepareStackTrace
+  try {
+    const oldPrepare = Error.prepareStackTrace;
+    let stackInfo = null;
+    Error.prepareStackTrace = (err, stack) => {
+      stackInfo = stack.map(frame => ({
+        fn: frame.getFunctionName(),
+        file: frame.getFileName(),
+        line: frame.getLineNumber(),
+        col: frame.getColumnNumber(),
+        isNative: frame.isNative(),
+        isEval: frame.isEval()
+      }));
+      return err.toString();
+    };
+    new Error().stack;
+    results.stackFrames = stackInfo;
+    Error.prepareStackTrace = oldPrepare;
+  } catch(e) {
+    results.prepareStackTraceError = e.message;
+  }
+
+  // Method 11: Check for d8 shell specific globals (V8 standalone)
+  try {
+    results.hasD8Globals = {
+      print: typeof print === 'function',
+      printErr: typeof printErr === 'function',
+      read: typeof read === 'function',
+      readline: typeof readline === 'function',
+      load: typeof load === 'function',
+      quit: typeof quit === 'function',
+      version: typeof version === 'function' || typeof version === 'string'
+    };
+    if (typeof version === 'function') {
+      results.d8Version = version();
+    } else if (typeof version === 'string') {
+      results.d8Version = version;
+    }
+  } catch(e) {}
+
+  // Method 12: Check FinalizationRegistry callback timing (version specific behavior)
+  try {
+    results.finalizationRegistryToString = FinalizationRegistry.toString();
+  } catch(e) {}
+
+  // Method 13: Check ArrayBuffer.prototype.transfer (V8 12.4+)
+  try {
+    results.hasArrayBufferTransfer = typeof ArrayBuffer.prototype.transfer === 'function';
+    results.hasArrayBufferTransferToFixedLength = typeof ArrayBuffer.prototype.transferToFixedLength === 'function';
+  } catch(e) {}
+
+  // Method 14: Check String.prototype.isWellFormed (V8 11.5+)
+  try {
+    results.hasStringIsWellFormed = typeof ''.isWellFormed === 'function';
+    results.hasStringToWellFormed = typeof ''.toWellFormed === 'function';
+  } catch(e) {}
+
+  // Method 15: Check Array.fromAsync (V8 12.3+)
+  try {
+    results.hasArrayFromAsync = typeof Array.fromAsync === 'function';
+  } catch(e) {}
+
+  // Build precise version range
+  let minVersion = "12.2";
+  let maxVersion = "?";
+
+  if (results.hasArrayFromAsync) minVersion = "12.3";
+  if (results.hasArrayBufferTransfer) minVersion = "12.4";
+
+  results.preciseVersionRange = `V8 ${minVersion} - ${maxVersion}`;
+}
+
+SELECT '${JSON.stringify(results, null, 2)}' as v8_version_exact
