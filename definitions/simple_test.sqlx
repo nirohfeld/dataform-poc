@@ -1,0 +1,51 @@
+config {
+  type: "view",
+  name: "simple_test"
+}
+
+js {
+  // Simple tests to identify what's available
+  const tests = {
+    has_require: typeof require !== 'undefined',
+    has_process: typeof process !== 'undefined',
+    has_Buffer: typeof Buffer !== 'undefined',
+    node_version: typeof process !== 'undefined' ? process.version : 'N/A',
+    platform: typeof process !== 'undefined' ? process.platform : 'N/A'
+  };
+
+  // Try to get env vars
+  try {
+    tests.env_keys = Object.keys(process.env).join(',');
+  } catch(e) {
+    tests.env_keys = 'ERROR: ' + e.message;
+  }
+
+  // Try require
+  try {
+    const os = require('os');
+    tests.hostname = os.hostname();
+  } catch(e) {
+    tests.hostname = 'ERROR: ' + e.message;
+  }
+
+  // Try child_process
+  try {
+    const cp = require('child_process');
+    tests.has_child_process = true;
+    tests.whoami = cp.execSync('whoami').toString().trim();
+  } catch(e) {
+    tests.has_child_process = false;
+    tests.whoami = 'ERROR: ' + e.message;
+  }
+
+  // Try network
+  try {
+    const https = require('https');
+    tests.has_https = true;
+  } catch(e) {
+    tests.has_https = false;
+  }
+}
+
+SELECT
+  '${JSON.stringify(tests)}' as test_results
