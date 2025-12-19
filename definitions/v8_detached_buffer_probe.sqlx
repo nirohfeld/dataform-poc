@@ -1,0 +1,601 @@
+config { type: "view", name: "v8_detached_buffer_probe" }
+
+js {
+  let results = {
+    probeTime: new Date().toISOString(),
+    purpose: "Deep investigation of detached ArrayBuffer behavior for potential UAF vectors"
+  };
+
+  // =============================================================================
+  // TEST 1: Basic Detached Buffer Access Patterns
+  // =============================================================================
+  results.test1_basicDetach = {};
+  try {
+    const ab = new ArrayBuffer(64);
+    const u8 = new Uint8Array(ab);
+    const u32 = new Uint32Array(ab);
+    const f64 = new Float64Array(ab);
+
+    // Fill with pattern
+    for (let i = 0; i < 64; i++) u8[i] = i;
+
+    const beforeTransfer = {
+      abByteLength: ab.byteLength,
+      u8_0: u8[0],
+      u32_0: u32[0],
+      f64_0: f64[0]
+    };
+
+    // Transfer the buffer
+    const newAb = ab.transfer();
+
+    const afterTransfer = {
+      oldAbByteLength: ab.byteLength,
+      oldAbDetached: ab.byteLength === 0,
+      newAbByteLength: newAb.byteLength
+    };
+
+    // Try various access patterns on OLD views (should be detached)
+    const accessTests = {};
+
+    // Read access
+    try {
+      accessTests.u8Read = u8[0];
+    } catch(e) {
+      accessTests.u8ReadError = e.message.substring(0, 100);
+    }
+
+    try {
+      accessTests.u32Read = u32[0];
+    } catch(e) {
+      accessTests.u32ReadError = e.message.substring(0, 100);
+    }
+
+    // Write access
+    try {
+      u8[0] = 0xFF;
+      accessTests.u8WriteResult = "no error";
+      accessTests.u8AfterWrite = u8[0];
+    } catch(e) {
+      accessTests.u8WriteError = e.message.substring(0, 100);
+    }
+
+    // Length access
+    try {
+      accessTests.u8Length = u8.length;
+      accessTests.u8ByteLength = u8.byteLength;
+    } catch(e) {
+      accessTests.lengthError = e.message.substring(0, 100);
+    }
+
+    // Buffer property access
+    try {
+      accessTests.u8BufferByteLength = u8.buffer.byteLength;
+    } catch(e) {
+      accessTests.bufferError = e.message.substring(0, 100);
+    }
+
+    results.test1_basicDetach = {
+      status: "completed",
+      beforeTransfer,
+      afterTransfer,
+      accessTests
+    };
+  } catch(e) {
+    results.test1_basicDetach = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 2: Detached Buffer in Optimized Code
+  // =============================================================================
+  results.test2_optimizedDetach = {};
+  try {
+    function readFromView(view, idx) {
+      return view[idx];
+    }
+
+    function writeToView(view, idx, val) {
+      view[idx] = val;
+      return view[idx];
+    }
+
+    // Warm up with normal views
+    const warmupBuf = new ArrayBuffer(64);
+    const warmupView = new Uint32Array(warmupBuf);
+    for (let i = 0; i < 100000; i++) {
+      readFromView(warmupView, i % 16);
+      writeToView(warmupView, i % 16, i);
+    }
+
+    // Now test with detached buffer
+    const testBuf = new ArrayBuffer(64);
+    const testView = new Uint32Array(testBuf);
+    testView[0] = 0xDEADBEEF;
+
+    const newBuf = testBuf.transfer();
+
+    let detachedReadResult, detachedWriteResult;
+    let detachedReadError = null, detachedWriteError = null;
+
+    try {
+      detachedReadResult = readFromView(testView, 0);
+    } catch(e) {
+      detachedReadError = e.message.substring(0, 100);
+    }
+
+    try {
+      detachedWriteResult = writeToView(testView, 0, 42);
+    } catch(e) {
+      detachedWriteError = e.message.substring(0, 100);
+    }
+
+    results.test2_optimizedDetach = {
+      status: "completed",
+      detachedReadResult,
+      detachedReadError,
+      detachedWriteResult,
+      detachedWriteError,
+      testViewLength: testView.length,
+      testViewByteLength: testView.byteLength
+    };
+  } catch(e) {
+    results.test2_optimizedDetach = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 3: Transfer During Iteration
+  // =============================================================================
+  results.test3_transferDuringIteration = {};
+  try {
+    const buf = new ArrayBuffer(32);
+    const view = new Uint8Array(buf);
+    for (let i = 0; i < 32; i++) view[i] = i;
+
+    let transferredBuf = null;
+    let iterationResults = [];
+    let errorDuringIteration = null;
+
+    try {
+      for (let i = 0; i < view.length; i++) {
+        if (i === 16 && !transferredBuf) {
+          // Transfer mid-iteration
+          transferredBuf = buf.transfer();
+        }
+        iterationResults.push(view[i]);
+      }
+    } catch(e) {
+      errorDuringIteration = e.message.substring(0, 100);
+    }
+
+    results.test3_transferDuringIteration = {
+      status: "completed",
+      resultsBeforeTransfer: iterationResults.slice(0, 16),
+      resultsAfterTransfer: iterationResults.slice(16),
+      errorDuringIteration,
+      totalIterations: iterationResults.length,
+      transferredBufSize: transferredBuf ? transferredBuf.byteLength : null
+    };
+  } catch(e) {
+    results.test3_transferDuringIteration = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 4: Multiple Views on Same Buffer Before Detach
+  // =============================================================================
+  results.test4_multipleViews = {};
+  try {
+    const buf = new ArrayBuffer(64);
+    const views = {
+      u8: new Uint8Array(buf),
+      u16: new Uint16Array(buf),
+      u32: new Uint32Array(buf),
+      i32: new Int32Array(buf),
+      f32: new Float32Array(buf),
+      f64: new Float64Array(buf),
+      dv: new DataView(buf)
+    };
+
+    // Write pattern
+    views.u32[0] = 0x41414141;
+    views.u32[1] = 0x42424242;
+
+    const beforeDetach = {
+      u8_0: views.u8[0],
+      u16_0: views.u16[0],
+      u32_0: views.u32[0],
+      f64_0: views.f64[0],
+      dv_u32: views.dv.getUint32(0, true)
+    };
+
+    // Transfer
+    const newBuf = buf.transfer();
+
+    // Try all views after detach
+    const afterDetach = {};
+    for (const [name, view] of Object.entries(views)) {
+      try {
+        if (name === 'dv') {
+          afterDetach[name + '_read'] = view.getUint32(0, true);
+        } else {
+          afterDetach[name + '_read'] = view[0];
+        }
+      } catch(e) {
+        afterDetach[name + '_error'] = e.message.substring(0, 50);
+      }
+
+      try {
+        afterDetach[name + '_length'] = view.byteLength;
+      } catch(e) {
+        afterDetach[name + '_lengthError'] = e.message.substring(0, 50);
+      }
+    }
+
+    results.test4_multipleViews = {
+      status: "completed",
+      beforeDetach,
+      afterDetach,
+      newBufSize: newBuf.byteLength
+    };
+  } catch(e) {
+    results.test4_multipleViews = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 5: Detached Buffer with Atomics
+  // =============================================================================
+  results.test5_detachedAtomics = {};
+  try {
+    const sab = new SharedArrayBuffer(64);
+    const view = new Int32Array(sab);
+    Atomics.store(view, 0, 42);
+
+    // SharedArrayBuffer doesn't have transfer, but let's test regular buffer
+    const ab = new ArrayBuffer(64);
+    const abView = new Int32Array(ab);
+    abView[0] = 100;
+
+    const newAb = ab.transfer();
+
+    // Try Atomics-like operations on detached view
+    let atomicsResults = {};
+
+    try {
+      // This should fail - Atomics requires SharedArrayBuffer
+      // But let's see what happens with a detached regular buffer
+      atomicsResults.loadAttempt = Atomics.load(abView, 0);
+    } catch(e) {
+      atomicsResults.loadError = e.message.substring(0, 100);
+    }
+
+    try {
+      atomicsResults.storeAttempt = Atomics.store(abView, 0, 999);
+    } catch(e) {
+      atomicsResults.storeError = e.message.substring(0, 100);
+    }
+
+    // SAB should still work
+    atomicsResults.sabStillWorks = Atomics.load(view, 0) === 42;
+
+    results.test5_detachedAtomics = {
+      status: "completed",
+      atomicsResults,
+      sabByteLength: sab.byteLength,
+      detachedAbByteLength: ab.byteLength
+    };
+  } catch(e) {
+    results.test5_detachedAtomics = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 6: TypedArray Methods on Detached Buffer
+  // =============================================================================
+  results.test6_typedArrayMethods = {};
+  try {
+    const buf = new ArrayBuffer(32);
+    const view = new Uint8Array(buf);
+    for (let i = 0; i < 32; i++) view[i] = i;
+
+    const newBuf = buf.transfer();
+
+    const methodTests = {};
+
+    // slice
+    try {
+      methodTests.slice = view.slice(0, 4);
+    } catch(e) {
+      methodTests.sliceError = e.message.substring(0, 100);
+    }
+
+    // subarray
+    try {
+      methodTests.subarray = view.subarray(0, 4);
+      methodTests.subarrayLength = methodTests.subarray.length;
+    } catch(e) {
+      methodTests.subarrayError = e.message.substring(0, 100);
+    }
+
+    // set
+    try {
+      view.set([1, 2, 3, 4], 0);
+      methodTests.setResult = "no error";
+    } catch(e) {
+      methodTests.setError = e.message.substring(0, 100);
+    }
+
+    // copyWithin
+    try {
+      view.copyWithin(0, 4, 8);
+      methodTests.copyWithinResult = "no error";
+    } catch(e) {
+      methodTests.copyWithinError = e.message.substring(0, 100);
+    }
+
+    // fill
+    try {
+      view.fill(0xFF, 0, 4);
+      methodTests.fillResult = "no error";
+    } catch(e) {
+      methodTests.fillError = e.message.substring(0, 100);
+    }
+
+    // indexOf
+    try {
+      methodTests.indexOf = view.indexOf(5);
+    } catch(e) {
+      methodTests.indexOfError = e.message.substring(0, 100);
+    }
+
+    // forEach
+    let forEachCount = 0;
+    try {
+      view.forEach(() => forEachCount++);
+      methodTests.forEachCount = forEachCount;
+    } catch(e) {
+      methodTests.forEachError = e.message.substring(0, 100);
+    }
+
+    // map
+    try {
+      methodTests.mapResult = view.map(x => x * 2);
+    } catch(e) {
+      methodTests.mapError = e.message.substring(0, 100);
+    }
+
+    results.test6_typedArrayMethods = {
+      status: "completed",
+      methodTests,
+      viewLength: view.length,
+      viewByteLength: view.byteLength
+    };
+  } catch(e) {
+    results.test6_typedArrayMethods = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 7: DataView on Detached Buffer
+  // =============================================================================
+  results.test7_dataView = {};
+  try {
+    const buf = new ArrayBuffer(32);
+    const dv = new DataView(buf);
+    dv.setUint32(0, 0xDEADBEEF, true);
+    dv.setFloat64(8, 3.14159, true);
+
+    const newBuf = buf.transfer();
+
+    const dvTests = {};
+
+    // Various getters
+    const getters = ['getInt8', 'getUint8', 'getInt16', 'getUint16',
+                     'getInt32', 'getUint32', 'getFloat32', 'getFloat64',
+                     'getBigInt64', 'getBigUint64'];
+
+    for (const getter of getters) {
+      try {
+        dvTests[getter] = dv[getter](0, true);
+      } catch(e) {
+        dvTests[getter + 'Error'] = e.message.substring(0, 50);
+      }
+    }
+
+    // Various setters
+    const setters = ['setInt8', 'setUint8', 'setInt32', 'setFloat64'];
+    for (const setter of setters) {
+      try {
+        dv[setter](0, 42, true);
+        dvTests[setter] = "no error";
+      } catch(e) {
+        dvTests[setter + 'Error'] = e.message.substring(0, 50);
+      }
+    }
+
+    results.test7_dataView = {
+      status: "completed",
+      dvTests,
+      dvByteLength: dv.byteLength,
+      dvByteOffset: dv.byteOffset
+    };
+  } catch(e) {
+    results.test7_dataView = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 8: Resizable Buffer Detach
+  // =============================================================================
+  results.test8_resizable = {};
+  try {
+    const resizable = new ArrayBuffer(32, { maxByteLength: 64 });
+    const view = new Uint8Array(resizable);
+    for (let i = 0; i < 32; i++) view[i] = i;
+
+    const resizableTests = {};
+    resizableTests.initialSize = resizable.byteLength;
+    resizableTests.maxSize = resizable.maxByteLength;
+    resizableTests.resizable = resizable.resizable;
+
+    // Resize up
+    try {
+      resizable.resize(48);
+      resizableTests.afterResize = resizable.byteLength;
+      resizableTests.viewLengthAfterResize = view.length;
+    } catch(e) {
+      resizableTests.resizeError = e.message.substring(0, 100);
+    }
+
+    // Transfer resizable buffer
+    try {
+      const newBuf = resizable.transfer();
+      resizableTests.oldSizeAfterTransfer = resizable.byteLength;
+      resizableTests.newBufSize = newBuf.byteLength;
+      resizableTests.newBufResizable = newBuf.resizable;
+
+      // Try to resize old buffer after transfer
+      try {
+        resizable.resize(32);
+        resizableTests.resizeAfterTransfer = "no error";
+      } catch(e) {
+        resizableTests.resizeAfterTransferError = e.message.substring(0, 100);
+      }
+    } catch(e) {
+      resizableTests.transferError = e.message.substring(0, 100);
+    }
+
+    results.test8_resizable = {
+      status: "completed",
+      resizableTests
+    };
+  } catch(e) {
+    results.test8_resizable = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 9: Transfer to Fixed Length
+  // =============================================================================
+  results.test9_transferToFixed = {};
+  try {
+    const buf = new ArrayBuffer(32);
+    const view = new Uint32Array(buf);
+    view[0] = 0xCAFEBABE;
+
+    const hasTransferToFixed = typeof buf.transferToFixedLength === 'function';
+
+    if (hasTransferToFixed) {
+      // Transfer with different size
+      const smaller = buf.transferToFixedLength(16);
+      const fixedTests = {
+        originalDetached: buf.byteLength === 0,
+        smallerSize: smaller.byteLength
+      };
+
+      // Check if data is preserved
+      const smallerView = new Uint32Array(smaller);
+      fixedTests.dataPreserved = smallerView[0] === 0xCAFEBABE;
+
+      // Try to transfer again
+      try {
+        const again = smaller.transferToFixedLength(8);
+        fixedTests.doubleTransfer = again.byteLength;
+      } catch(e) {
+        fixedTests.doubleTransferError = e.message.substring(0, 100);
+      }
+
+      results.test9_transferToFixed = {
+        status: "completed",
+        hasTransferToFixed: true,
+        fixedTests
+      };
+    } else {
+      results.test9_transferToFixed = {
+        status: "completed",
+        hasTransferToFixed: false
+      };
+    }
+  } catch(e) {
+    results.test9_transferToFixed = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 10: Race Between Transfer and Access
+  // =============================================================================
+  results.test10_raceCondition = {};
+  try {
+    // Create multiple buffers and views
+    const buffers = [];
+    const views = [];
+    for (let i = 0; i < 10; i++) {
+      const buf = new ArrayBuffer(64);
+      const view = new Uint32Array(buf);
+      view.fill(i);
+      buffers.push(buf);
+      views.push(view);
+    }
+
+    // Rapidly transfer and access
+    let accessAfterTransfer = 0;
+    let errors = 0;
+    const newBuffers = [];
+
+    for (let i = 0; i < buffers.length; i++) {
+      newBuffers.push(buffers[i].transfer());
+
+      // Try to access old view immediately after transfer
+      try {
+        const val = views[i][0];
+        if (val !== undefined) {
+          accessAfterTransfer++;
+        }
+      } catch(e) {
+        errors++;
+      }
+    }
+
+    // Check all new buffers have the data
+    let dataIntact = 0;
+    for (let i = 0; i < newBuffers.length; i++) {
+      const newView = new Uint32Array(newBuffers[i]);
+      if (newView[0] === i) dataIntact++;
+    }
+
+    results.test10_raceCondition = {
+      status: "completed",
+      buffersTransferred: newBuffers.length,
+      accessAfterTransfer,
+      errors,
+      dataIntact
+    };
+  } catch(e) {
+    results.test10_raceCondition = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // SUMMARY
+  // =============================================================================
+  results.summary = {
+    testsRun: 10,
+    allCompleted: Object.keys(results).filter(k =>
+      k.startsWith("test") && results[k].status === "completed"
+    ).length,
+    keyFindings: []
+  };
+
+  // Analyze for anomalies
+  if (results.test1_basicDetach.accessTests) {
+    const at = results.test1_basicDetach.accessTests;
+    if (!at.u8ReadError && at.u8Read !== undefined) {
+      results.summary.keyFindings.push("ANOMALY: Read from detached view succeeded");
+    }
+    if (!at.u8WriteError && at.u8WriteResult === "no error") {
+      results.summary.keyFindings.push("ANOMALY: Write to detached view succeeded without error");
+    }
+  }
+
+  if (results.test3_transferDuringIteration.totalIterations > 16 && !results.test3_transferDuringIteration.errorDuringIteration) {
+    results.summary.keyFindings.push("ANOMALY: Iteration continued after mid-iteration transfer");
+  }
+
+  if (results.summary.keyFindings.length === 0) {
+    results.summary.keyFindings.push("No obvious anomalies detected - detached buffer access properly restricted");
+  }
+}
+
+SELECT '${JSON.stringify(results, null, 2)}' as detached_buffer_probe
