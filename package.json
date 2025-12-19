@@ -3,6 +3,6 @@
   "version": "1.0.0",
   "description": "Dataform V8 security research",
   "dependencies": {
-    "@dataform/core": "^2.9.0"
+    "@dataform/core": "^3.0.0"
   }
 }
