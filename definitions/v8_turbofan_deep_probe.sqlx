@@ -1,0 +1,334 @@
+config { type: "view", name: "v8_turbofan_deep_probe" }
+
+js {
+  let results = {
+    probeTime: new Date().toISOString(),
+    purpose: "Deep TurboFan optimization probes - higher iteration counts for tier-up"
+  };
+
+  // =============================================================================
+  // TEST 1: Bounds Check Elimination with Integer Overflow
+  // TurboFan may eliminate bounds checks after proving index is always valid
+  // =============================================================================
+  results.test1_boundsElim = {};
+  try {
+    const arr = new Array(100).fill(1);
+
+    function hotBoundsCheck(arr, i) {
+      // TurboFan should prove i is always < 100 and eliminate bounds check
+      if (i >= 0 && i < arr.length) {
+        return arr[i];
+      }
+      return -1;
+    }
+
+    // Deep warmup for TurboFan (needs ~100k for tier-up)
+    for (let i = 0; i < 150000; i++) {
+      hotBoundsCheck(arr, i % 100);
+    }
+
+    // Test with edge cases after optimization
+    const results_arr = [];
+    results_arr.push(hotBoundsCheck(arr, 99));   // Last valid
+    results_arr.push(hotBoundsCheck(arr, 100));  // First OOB
+    results_arr.push(hotBoundsCheck(arr, -1));   // Negative
+    results_arr.push(hotBoundsCheck(arr, 0x7fffffff)); // Max int
+
+    results.test1_boundsElim = {
+      status: "completed",
+      lastValid: results_arr[0],
+      firstOOB: results_arr[1],
+      negative: results_arr[2],
+      maxInt: results_arr[3]
+    };
+  } catch(e) {
+    results.test1_boundsElim = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 2: Type Feedback Poisoning
+  // Train IC with one type, then switch to cause deopt/recompile
+  // =============================================================================
+  results.test2_typeFeedback = {};
+  try {
+    function polymorphicLoad(obj) {
+      return obj.x + obj.y;
+    }
+
+    // Phase 1: Monomorphic training
+    const mono = { x: 1, y: 2 };
+    for (let i = 0; i < 100000; i++) {
+      polymorphicLoad(mono);
+    }
+
+    // Phase 2: Inject polymorphism
+    const shapes = [
+      { x: 1, y: 2 },
+      { y: 2, x: 1 },  // Different property order
+      { x: 1, y: 2, z: 3 },  // Extra property
+      { a: 0, x: 1, y: 2 },  // Property before x
+    ];
+
+    const phaseResults = [];
+    for (let i = 0; i < 10000; i++) {
+      phaseResults.push(polymorphicLoad(shapes[i % 4]));
+    }
+
+    // Phase 3: Array with x,y properties
+    const arrWithProps = [1, 2, 3];
+    arrWithProps.x = 10;
+    arrWithProps.y = 20;
+    const arrResult = polymorphicLoad(arrWithProps);
+
+    results.test2_typeFeedback = {
+      status: "completed",
+      monoResult: polymorphicLoad(mono),
+      polyResults: phaseResults.slice(-4),
+      arrResult: arrResult
+    };
+  } catch(e) {
+    results.test2_typeFeedback = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 3: Escape Analysis Bypass
+  // Objects that don't escape should be stack-allocated
+  // =============================================================================
+  results.test3_escapeAnalysis = {};
+  try {
+    let escaped = null;
+
+    function maybeEscape(shouldEscape) {
+      const obj = { a: 1, b: 2, c: 3 };
+      if (shouldEscape) {
+        escaped = obj;  // Force heap allocation
+      }
+      return obj.a + obj.b + obj.c;
+    }
+
+    // Warm up without escaping
+    for (let i = 0; i < 100000; i++) {
+      maybeEscape(false);
+    }
+
+    // Now escape
+    const result1 = maybeEscape(true);
+    const escapedCopy = escaped;
+
+    // Continue without escaping
+    for (let i = 0; i < 10000; i++) {
+      maybeEscape(false);
+    }
+
+    results.test3_escapeAnalysis = {
+      status: "completed",
+      result: result1,
+      escapedA: escapedCopy ? escapedCopy.a : "null",
+      escapedB: escapedCopy ? escapedCopy.b : "null"
+    };
+  } catch(e) {
+    results.test3_escapeAnalysis = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 4: Speculative Inlining Depth
+  // Deep call chains that get inlined then deoptimized
+  // =============================================================================
+  results.test4_inlining = {};
+  try {
+    function level1(x) { return level2(x) + 1; }
+    function level2(x) { return level3(x) + 1; }
+    function level3(x) { return level4(x) + 1; }
+    function level4(x) { return level5(x) + 1; }
+    function level5(x) { return x * 2; }
+
+    // Warm up the entire chain
+    for (let i = 0; i < 100000; i++) {
+      level1(i);
+    }
+
+    // Test with different types
+    const intResult = level1(10);
+    const floatResult = level1(10.5);
+    const bigResult = level1(Number.MAX_SAFE_INTEGER);
+
+    // Redefine level5 to cause deopt
+    const originalLevel5 = level5;
+
+    results.test4_inlining = {
+      status: "completed",
+      intResult: intResult,
+      floatResult: floatResult,
+      bigResult: bigResult
+    };
+  } catch(e) {
+    results.test4_inlining = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 5: Array.prototype Pollution During Optimization
+  // =============================================================================
+  results.test5_protoPollution = {};
+  try {
+    const originalAt = Array.prototype.at;
+
+    function accessArray(arr, idx) {
+      return arr[idx];
+    }
+
+    const testArr = [10, 20, 30, 40, 50];
+
+    // Warm up
+    for (let i = 0; i < 100000; i++) {
+      accessArray(testArr, i % 5);
+    }
+
+    // Pollute prototype with getter
+    let getterCalled = 0;
+    Object.defineProperty(Array.prototype, '100', {
+      get: function() { getterCalled++; return 999; },
+      configurable: true
+    });
+
+    const normalAccess = accessArray(testArr, 2);
+    const protoAccess = accessArray(testArr, 100);
+
+    // Clean up
+    delete Array.prototype['100'];
+
+    results.test5_protoPollution = {
+      status: "completed",
+      normalAccess: normalAccess,
+      protoAccess: protoAccess,
+      getterCalled: getterCalled
+    };
+  } catch(e) {
+    results.test5_protoPollution = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 6: SharedArrayBuffer Race Condition
+  // =============================================================================
+  results.test6_sabRace = {};
+  try {
+    const sab = new SharedArrayBuffer(1024);
+    const view = new Int32Array(sab);
+
+    // Initialize
+    Atomics.store(view, 0, 0);
+
+    function racyIncrement() {
+      const old = Atomics.load(view, 0);
+      // Non-atomic operation in between
+      view[1] = old + 1;
+      Atomics.store(view, 0, old + 1);
+      return view[1];
+    }
+
+    // Warm up
+    for (let i = 0; i < 100000; i++) {
+      racyIncrement();
+    }
+
+    const finalValue = Atomics.load(view, 0);
+    const nonAtomicValue = view[1];
+
+    results.test6_sabRace = {
+      status: "completed",
+      atomicFinal: finalValue,
+      nonAtomicFinal: nonAtomicValue,
+      match: finalValue === nonAtomicValue
+    };
+  } catch(e) {
+    results.test6_sabRace = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 7: Double-to-SMI Transition Confusion
+  // =============================================================================
+  results.test7_smiTransition = {};
+  try {
+    function addNumbers(a, b) {
+      return a + b;
+    }
+
+    // Train with SMIs
+    for (let i = 0; i < 100000; i++) {
+      addNumbers(i, i + 1);
+    }
+
+    // Test with various numeric types
+    const smiResult = addNumbers(10, 20);
+    const heapNumResult = addNumbers(1.5, 2.5);
+    const overflowResult = addNumbers(0x3fffffff, 0x3fffffff);  // SMI overflow
+    const nanResult = addNumbers(NaN, 1);
+    const infResult = addNumbers(Infinity, 1);
+
+    results.test7_smiTransition = {
+      status: "completed",
+      smiResult: smiResult,
+      heapNumResult: heapNumResult,
+      overflowResult: overflowResult,
+      nanResult: isNaN(nanResult),
+      infResult: infResult === Infinity
+    };
+  } catch(e) {
+    results.test7_smiTransition = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 8: Object.assign During Optimization
+  // =============================================================================
+  results.test8_objectAssign = {};
+  try {
+    function mergeObjects(target, source) {
+      return Object.assign(target, source);
+    }
+
+    // Warm up with consistent shapes
+    for (let i = 0; i < 50000; i++) {
+      mergeObjects({ a: 1 }, { b: 2 });
+    }
+
+    // Test with proxy as source
+    let trapLog = [];
+    const proxySource = new Proxy({ c: 3 }, {
+      get(target, prop) {
+        trapLog.push(prop);
+        return target[prop];
+      },
+      ownKeys(target) {
+        trapLog.push('ownKeys');
+        return Reflect.ownKeys(target);
+      },
+      getOwnPropertyDescriptor(target, prop) {
+        trapLog.push('descriptor:' + String(prop));
+        return Reflect.getOwnPropertyDescriptor(target, prop);
+      }
+    });
+
+    const result = mergeObjects({ a: 1 }, proxySource);
+
+    results.test8_objectAssign = {
+      status: "completed",
+      resultA: result.a,
+      resultC: result.c,
+      trapsCalled: trapLog.length,
+      traps: trapLog.slice(0, 10)
+    };
+  } catch(e) {
+    results.test8_objectAssign = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // SUMMARY
+  // =============================================================================
+  results.summary = {
+    testsRun: 8,
+    allCompleted: Object.keys(results).filter(k =>
+      k.startsWith("test") && results[k].status === "completed"
+    ).length
+  };
+}
+
+SELECT '${JSON.stringify(results, null, 2)}' as turbofan_deep_probe

@@ -1,0 +1,431 @@
+config { type: "view", name: "v8_edge_cases_probe" }
+
+js {
+  let results = {
+    probeTime: new Date().toISOString(),
+    purpose: "Edge case probes targeting obscure V8 behaviors"
+  };
+
+  // =============================================================================
+  // TEST 1: Array.prototype methods with modified length
+  // =============================================================================
+  results.test1_arrayLength = {};
+  try {
+    const arr = [1, 2, 3, 4, 5];
+
+    function mapArray(a) {
+      return a.map(x => x * 2);
+    }
+
+    // Warm up
+    for (let i = 0; i < 50000; i++) {
+      mapArray(arr);
+    }
+
+    // Modify length during iteration
+    let modifyCount = 0;
+    const trickyArr = [1, 2, 3, 4, 5];
+    Object.defineProperty(trickyArr, 'length', {
+      get: function() {
+        modifyCount++;
+        return 5;
+      }
+    });
+
+    let mapCallCount = 0;
+    const result = trickyArr.map(x => {
+      mapCallCount++;
+      return x * 2;
+    });
+
+    results.test1_arrayLength = {
+      status: "completed",
+      resultLength: result.length,
+      mapCalls: mapCallCount,
+      lengthGets: modifyCount
+    };
+  } catch(e) {
+    results.test1_arrayLength = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 2: Object.defineProperty during optimization
+  // =============================================================================
+  results.test2_defineProperty = {};
+  try {
+    const obj = { a: 1, b: 2 };
+
+    function readProps(o) {
+      return o.a + o.b;
+    }
+
+    // Warm up
+    for (let i = 0; i < 100000; i++) {
+      readProps(obj);
+    }
+
+    // Redefine property with getter
+    let getterCalls = 0;
+    Object.defineProperty(obj, 'a', {
+      get: function() {
+        getterCalls++;
+        return 100;
+      },
+      configurable: true
+    });
+
+    const afterRedefine = readProps(obj);
+
+    // Reset
+    Object.defineProperty(obj, 'a', {
+      value: 1,
+      writable: true,
+      configurable: true
+    });
+
+    results.test2_defineProperty = {
+      status: "completed",
+      afterRedefine: afterRedefine,
+      getterCalls: getterCalls
+    };
+  } catch(e) {
+    results.test2_defineProperty = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 3: Reflect.set with receiver
+  // =============================================================================
+  results.test3_reflectSet = {};
+  try {
+    const target = { x: 1 };
+    const receiver = { x: 10 };
+
+    function setWithReflect(t, r, val) {
+      return Reflect.set(t, 'x', val, r);
+    }
+
+    // Warm up
+    for (let i = 0; i < 50000; i++) {
+      setWithReflect(target, receiver, i);
+    }
+
+    setWithReflect(target, receiver, 999);
+
+    results.test3_reflectSet = {
+      status: "completed",
+      targetX: target.x,
+      receiverX: receiver.x
+    };
+  } catch(e) {
+    results.test3_reflectSet = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 4: String.prototype with non-string this
+  // =============================================================================
+  results.test4_stringProto = {};
+  try {
+    function callStringMethod(obj) {
+      return String.prototype.charAt.call(obj, 0);
+    }
+
+    // Warm up with strings
+    for (let i = 0; i < 50000; i++) {
+      callStringMethod("hello");
+    }
+
+    // Call with non-string
+    const numResult = callStringMethod(12345);
+    const objResult = callStringMethod({ toString: () => "custom" });
+    const arrResult = callStringMethod([1, 2, 3]);
+
+    results.test4_stringProto = {
+      status: "completed",
+      numResult: numResult,
+      objResult: objResult,
+      arrResult: arrResult
+    };
+  } catch(e) {
+    results.test4_stringProto = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 5: RegExp lastIndex manipulation
+  // =============================================================================
+  results.test5_regexpLastIndex = {};
+  try {
+    const regex = /a/g;
+
+    function execRegex(r, str) {
+      return r.exec(str);
+    }
+
+    // Warm up
+    for (let i = 0; i < 50000; i++) {
+      regex.lastIndex = 0;
+      execRegex(regex, "aaa");
+    }
+
+    // Manipulate lastIndex
+    regex.lastIndex = 1;
+    const match1 = execRegex(regex, "aaa");
+
+    // Set to invalid value
+    regex.lastIndex = -1;
+    let negativeResult;
+    try {
+      negativeResult = execRegex(regex, "aaa");
+    } catch(e) {
+      negativeResult = "error: " + e.message;
+    }
+
+    // Set to very large value
+    regex.lastIndex = 0x7fffffff;
+    const largeResult = execRegex(regex, "aaa");
+
+    results.test5_regexpLastIndex = {
+      status: "completed",
+      match1Index: match1 ? match1.index : null,
+      negativeResult: negativeResult ? (typeof negativeResult === 'string' ? negativeResult : negativeResult.index) : null,
+      largeResult: largeResult
+    };
+  } catch(e) {
+    results.test5_regexpLastIndex = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 6: Sparse Array Handling
+  // =============================================================================
+  results.test6_sparseArray = {};
+  try {
+    function sumArray(arr) {
+      let sum = 0;
+      for (let i = 0; i < arr.length; i++) {
+        if (arr[i] !== undefined) {
+          sum += arr[i];
+        }
+      }
+      return sum;
+    }
+
+    // Warm up with dense array
+    const dense = [1, 2, 3, 4, 5];
+    for (let i = 0; i < 50000; i++) {
+      sumArray(dense);
+    }
+
+    // Test with sparse array
+    const sparse = [];
+    sparse[0] = 1;
+    sparse[1000000] = 2;
+
+    const sparseSum = sumArray(sparse);
+    const sparseLength = sparse.length;
+
+    // Test with holes
+    const holey = [1, , 3, , 5];
+    const holeySum = sumArray(holey);
+
+    results.test6_sparseArray = {
+      status: "completed",
+      sparseSum: sparseSum,
+      sparseLength: sparseLength,
+      holeySum: holeySum,
+      holeyLength: holey.length
+    };
+  } catch(e) {
+    results.test6_sparseArray = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 7: TypedArray.prototype.set with overlapping
+  // =============================================================================
+  results.test7_typedArraySet = {};
+  try {
+    const buf = new ArrayBuffer(32);
+    const view1 = new Uint8Array(buf, 0, 16);
+    const view2 = new Uint8Array(buf, 8, 16);
+
+    // Initialize
+    for (let i = 0; i < 16; i++) {
+      view1[i] = i;
+    }
+
+    function copyTypedArray(dest, src) {
+      dest.set(src);
+    }
+
+    // Warm up with non-overlapping
+    const src = new Uint8Array([100, 101, 102, 103]);
+    for (let i = 0; i < 50000; i++) {
+      const temp = new Uint8Array(16);
+      copyTypedArray(temp, src);
+    }
+
+    // Now do overlapping copy
+    const before = Array.from(view1);
+    view1.set(view2);
+    const after = Array.from(view1);
+
+    results.test7_typedArraySet = {
+      status: "completed",
+      before: before.slice(0, 8),
+      after: after.slice(0, 8)
+    };
+  } catch(e) {
+    results.test7_typedArraySet = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 8: Iterator Protocol Abuse
+  // =============================================================================
+  results.test8_iteratorAbuse = {};
+  try {
+    let iterCount = 0;
+
+    const evilIterable = {
+      [Symbol.iterator]() {
+        return {
+          count: 0,
+          next() {
+            iterCount++;
+            if (this.count++ < 5) {
+              return { value: this.count, done: false };
+            }
+            return { done: true };
+          }
+        };
+      }
+    };
+
+    function spreadIterable(iter) {
+      return [...iter];
+    }
+
+    // Warm up with array
+    for (let i = 0; i < 50000; i++) {
+      spreadIterable([1, 2, 3]);
+    }
+
+    // Test with evil iterable
+    iterCount = 0;
+    const evilResult = spreadIterable(evilIterable);
+
+    // Test with iterator that returns wrong done value
+    const confusingIterator = {
+      [Symbol.iterator]() {
+        return {
+          count: 0,
+          next() {
+            return { value: this.count++, done: this.count > 3 };
+          }
+        };
+      }
+    };
+
+    const confusingResult = spreadIterable(confusingIterator);
+
+    results.test8_iteratorAbuse = {
+      status: "completed",
+      evilResult: evilResult,
+      iterCount: iterCount,
+      confusingResult: confusingResult
+    };
+  } catch(e) {
+    results.test8_iteratorAbuse = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 9: Map/Set with NaN keys
+  // =============================================================================
+  results.test9_nanKeys = {};
+  try {
+    const map = new Map();
+    const set = new Set();
+
+    function mapOps(m) {
+      m.set(NaN, "value");
+      return m.get(NaN);
+    }
+
+    // Warm up
+    for (let i = 0; i < 50000; i++) {
+      const tempMap = new Map();
+      mapOps(tempMap);
+    }
+
+    // Test NaN as key (NaN !== NaN, but Map should handle it)
+    map.set(NaN, "first");
+    map.set(NaN, "second");  // Should overwrite
+
+    set.add(NaN);
+    set.add(NaN);  // Should not add duplicate
+
+    results.test9_nanKeys = {
+      status: "completed",
+      mapSize: map.size,
+      mapValue: map.get(NaN),
+      setSize: set.size,
+      setHasNaN: set.has(NaN)
+    };
+  } catch(e) {
+    results.test9_nanKeys = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 10: Detached ArrayBuffer Access After Transfer
+  // =============================================================================
+  results.test10_detachedBuffer = {};
+  try {
+    const ab = new ArrayBuffer(32);
+    const view = new Uint32Array(ab);
+    view[0] = 0xDEADBEEF;
+    view[1] = 0xCAFEBABE;
+
+    const hasTransfer = typeof ab.transfer === 'function';
+
+    if (hasTransfer) {
+      const newBuffer = ab.transfer();
+
+      let accessError = null;
+      let detachedByteLength = null;
+      try {
+        detachedByteLength = ab.byteLength;
+        view[0] = 42;  // Should fail on detached buffer
+      } catch(e) {
+        accessError = e.message.substring(0, 100);
+      }
+
+      const newView = new Uint32Array(newBuffer);
+
+      results.test10_detachedBuffer = {
+        status: "completed",
+        hasTransfer: true,
+        detachedByteLength: detachedByteLength,
+        accessError: accessError,
+        newBufferSize: newBuffer.byteLength,
+        newView0: newView[0].toString(16),
+        newView1: newView[1].toString(16)
+      };
+    } else {
+      results.test10_detachedBuffer = {
+        status: "completed",
+        hasTransfer: false
+      };
+    }
+  } catch(e) {
+    results.test10_detachedBuffer = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // SUMMARY
+  // =============================================================================
+  results.summary = {
+    testsRun: 10,
+    allCompleted: Object.keys(results).filter(k =>
+      k.startsWith("test") && results[k].status === "completed"
+    ).length
+  };
+}
+
+SELECT '${JSON.stringify(results, null, 2)}' as edge_cases_probe
