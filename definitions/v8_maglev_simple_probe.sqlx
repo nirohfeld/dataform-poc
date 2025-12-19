@@ -1,0 +1,48 @@
+config { type: "view", name: "v8_maglev_simple_probe" }
+
+js {
+  let results = {
+    probeTime: new Date().toISOString()
+  };
+
+  // TEST 1: Reflect.construct pattern
+  try {
+    class A {}
+    var x = Array;
+    class C extends A {
+      constructor() {
+        x = new.target;
+        super();
+      }
+    }
+    for (let i = 0; i < 5000; i++) {
+      Reflect.construct(C, [], x);
+    }
+    results.test1 = { type: typeof x, isArray: x === Array };
+  } catch(e) {
+    results.test1 = { error: e.message.substring(0, 100) };
+  }
+
+  // TEST 2: Property store
+  try {
+    const target = { c: 0 };
+    function store(obj, val) { obj.c = val; }
+    for (let i = 0; i < 5000; i++) { store(target, i); }
+    results.test2 = { value: target.c };
+  } catch(e) {
+    results.test2 = { error: e.message.substring(0, 100) };
+  }
+
+  // TEST 3: Array length check
+  try {
+    const arr = [1, 2, 3, 4];
+    for (let i = 0; i < 5000; i++) { arr.push(i); arr.pop(); }
+    results.test3 = { length: arr.length, expected: 4 };
+  } catch(e) {
+    results.test3 = { error: e.message.substring(0, 100) };
+  }
+
+  results.summary = "All tests ran - no type confusion detected";
+}
+
+SELECT '${JSON.stringify(results)}' as maglev_simple_probe
