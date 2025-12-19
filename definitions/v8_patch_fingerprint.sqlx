@@ -100,4 +100,4 @@ js {
   };
 }
 
-SELECT '${JSON.stringify(results, null, 2)}' as v8_fingerprint
+SELECT '${JSON.stringify(results, null, 2)}' as v8_patch_fingerprint
