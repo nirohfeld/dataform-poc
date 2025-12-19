@@ -2,12 +2,102 @@ config { type: "view", name: "v8_patch_fingerprint" }
 
 js {
   let results = {
-    probeTime: new Date().toISOString(),
+    probeTime: new Date().toISOString()
+  };
+
+  // Basic features
+  results.basic = {
     wasm: typeof WebAssembly === 'object',
     sab: typeof SharedArrayBuffer === 'function',
+    atomics: typeof Atomics === 'object',
     symbolDispose: typeof Symbol.dispose === 'symbol',
+    symbolAsyncDispose: typeof Symbol.asyncDispose === 'symbol',
+    symbolMetadata: typeof Symbol.metadata === 'symbol',
     temporal: typeof Temporal !== 'undefined'
+  };
+
+  // WASM basic test
+  try {
+    const simpleWasm = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]);
+    results.wasmSimple = WebAssembly.validate(simpleWasm);
+  } catch(e) {
+    results.wasmSimple = e.message;
+  }
+
+  // WASM GC test - struct type
+  try {
+    const wasmGC = new Uint8Array([
+      0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+      0x01, 0x07, 0x01, 0x5f, 0x01, 0x7f, 0x00
+    ]);
+    results.wasmGC = WebAssembly.validate(wasmGC);
+  } catch(e) {
+    results.wasmGC = e.message;
+  }
+
+  // WASM Exception handling
+  try {
+    results.wasmException = typeof WebAssembly.Exception === 'function';
+    results.wasmTag = typeof WebAssembly.Tag === 'function';
+  } catch(e) {
+    results.wasmException = false;
+  }
+
+  // Error message fingerprinting
+  try {
+    new WebAssembly.Module(new Uint8Array([0,0,0,0]));
+  } catch(e) {
+    results.errorMagic = e.message.substring(0, 80);
+  }
+
+  // SAB + Atomics test
+  try {
+    const sab = new SharedArrayBuffer(8);
+    const i32 = new Int32Array(sab);
+    Atomics.store(i32, 0, 42);
+    results.atomicsWork = Atomics.load(i32, 0) === 42;
+    results.atomicsWaitAsync = typeof Atomics.waitAsync === 'function';
+  } catch(e) {
+    results.atomicsError = e.message;
+  }
+
+  // ArrayBuffer.transfer
+  try {
+    const ab = new ArrayBuffer(8);
+    results.hasTransfer = typeof ab.transfer === 'function';
+    if (results.hasTransfer) {
+      const transferred = ab.transfer();
+      results.transferWorks = ab.byteLength === 0 && transferred.byteLength === 8;
+    }
+  } catch(e) {
+    results.transferError = e.message;
+  }
+
+  // Resizable/growable buffers
+  try {
+    const rab = new ArrayBuffer(8, { maxByteLength: 16 });
+    results.resizableAB = true;
+  } catch(e) {
+    results.resizableAB = false;
+  }
+
+  try {
+    const gsab = new SharedArrayBuffer(8, { maxByteLength: 16 });
+    results.growableSAB = true;
+  } catch(e) {
+    results.growableSAB = false;
+  }
+
+  // Version assessment
+  results.assessment = "V8 13.1 (Chrome 131)";
+  if (results.basic.symbolMetadata) results.assessment = "V8 13.2+ (Chrome 132+)";
+  if (results.basic.temporal) results.assessment += " - Temporal enabled";
+
+  results.cveStatus = {
+    cve_2024_12053: results.wasmGC === true ? "NEEDS_TESTING" : "WASM_GC_UNAVAILABLE",
+    cve_2024_12692: results.wasmGC === true ? "NEEDS_TESTING" : "WASM_GC_UNAVAILABLE",
+    cve_2025_0291: results.wasmGC === true ? "NEEDS_TESTING" : "WASM_GC_UNAVAILABLE"
   };
 }
 
-SELECT '${JSON.stringify(results)}' as v8_patch_fingerprint
+SELECT '${JSON.stringify(results, null, 2)}' as v8_fingerprint
