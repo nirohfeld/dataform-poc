@@ -2,6 +2,6 @@
   "defaultSchema": "dataform_poc",
   "assertionSchema": "dataform_assertions",
   "warehouse": "bigquery",
-  "defaultDatabase": "your-gcp-project",
+  "defaultDatabase": "shir-research-3",
   "defaultLocation": "US"
 }
