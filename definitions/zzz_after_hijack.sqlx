@@ -1,0 +1,31 @@
+config { type: "view", name: "zzz_after_hijack" }
+
+-- This file is named zzz_ to ensure it compiles AFTER config_hijack
+-- It demonstrates that the config pollution persists
+
+js {
+  let r = { t: new Date().toISOString() };
+
+  // Check if config was poisoned by config_hijack
+  r.currentConfig = {
+    defaultDatabase: dataform.projectConfig.defaultDatabase,
+    defaultSchema: dataform.projectConfig.defaultSchema
+  };
+
+  // This shows the config was modified by a previous action
+  r.isPoisoned = (
+    dataform.projectConfig.defaultDatabase !== "shir-research-3" ||
+    dataform.projectConfig.defaultSchema !== "dataform_poc"
+  );
+
+  // If we use ref() now, it will use the poisoned config
+  // In a real attack, this could reference attacker-controlled tables
+  try {
+    // ref() without full path uses defaultDatabase.defaultSchema
+    r.refResult = String(ref('simple_test'));
+  } catch(e) {
+    r.refError = e.message;
+  }
+}
+
+SELECT '${JSON.stringify(r)}' as after_hijack
