@@ -1,15 +1,15 @@
 /**
  * Cross-Tenant Shared Worker State Probe
+ * Version 2: No fs module (blocked), focus on JS-level state sharing
  *
- * This probe tests whether V8 compilation workers are shared across tenants
+ * Tests whether V8 compilation workers are shared across tenants
  * by checking for state persistence in:
- * - /tmp filesystem
  * - Global prototype modifications
  * - require.cache module injection
  * - Global scope variables
+ * - dataform object modifications
  */
 
-const fs = require ? require("fs") : null;
 const timestamp = Date.now();
 const uniqueId = Math.random().toString(36).substring(2, 15);
 const canaryMarker = `CANARY_${timestamp}_${uniqueId}`;
@@ -22,71 +22,7 @@ const probeResults = {
 };
 
 // ============================================
-// TEST 1: /tmp Filesystem Persistence
-// ============================================
-try {
-  const tmpMarkerPath = "/tmp/dataform_cross_tenant_marker";
-  const tmpCanaryPath = "/tmp/dataform_canary_" + uniqueId;
-
-  // Check if previous marker exists (from other tenant or previous compilation)
-  let existingMarkers = [];
-  let tmpDirContents = [];
-
-  if (fs && fs.existsSync) {
-    // Try to read /tmp directory
-    try {
-      tmpDirContents = fs.readdirSync("/tmp").filter(f => f.includes("dataform"));
-    } catch (e) {
-      tmpDirContents = ["ERROR: " + e.message];
-    }
-
-    // Check for existing marker file
-    if (fs.existsSync(tmpMarkerPath)) {
-      try {
-        existingMarkers.push({
-          path: tmpMarkerPath,
-          content: fs.readFileSync(tmpMarkerPath, "utf8")
-        });
-      } catch (e) {
-        existingMarkers.push({path: tmpMarkerPath, error: e.message});
-      }
-    }
-
-    // Try to write our marker
-    let writeSuccess = false;
-    try {
-      fs.writeFileSync(tmpMarkerPath, JSON.stringify({
-        written_by: canaryMarker,
-        timestamp: new Date().toISOString(),
-        message: "If you see this, /tmp is shared!"
-      }));
-      writeSuccess = true;
-    } catch (e) {
-      writeSuccess = "ERROR: " + e.message;
-    }
-
-    probeResults.tests.tmpFilesystem = {
-      available: true,
-      existingMarkers: existingMarkers,
-      tmpDirContents: tmpDirContents,
-      writeSuccess: writeSuccess,
-      markerPath: tmpMarkerPath
-    };
-  } else {
-    probeResults.tests.tmpFilesystem = {
-      available: false,
-      reason: "fs module not available"
-    };
-  }
-} catch (e) {
-  probeResults.tests.tmpFilesystem = {
-    available: false,
-    error: e.message
-  };
-}
-
-// ============================================
-// TEST 2: Global Prototype Pollution
+// TEST 1: Global Prototype Pollution
 // ============================================
 try {
   // Check if Object.prototype has been modified by previous compilation
@@ -101,6 +37,7 @@ try {
 
   // Set our canary
   Object.prototype.__crossTenantCanary = canaryMarker;
+  Object.prototype.__crossTenantTimestamp = timestamp;
 
   // Also try Array prototype
   const hasArrayCanary = Array.prototype.__crossTenantCanary !== undefined;
@@ -111,6 +48,10 @@ try {
   const hasFunctionCanary = Function.prototype.__crossTenantCanary !== undefined;
   const existingFunctionCanary = Function.prototype.__crossTenantCanary;
   Function.prototype.__crossTenantCanary = canaryMarker;
+
+  // Try String prototype
+  const hasStringCanary = String.prototype.__crossTenantCanary !== undefined;
+  String.prototype.__crossTenantCanary = canaryMarker;
 
   probeResults.tests.prototypePollution = {
     objectPrototype: {
@@ -128,16 +69,21 @@ try {
       hadCanary: hasFunctionCanary,
       existingCanaryValue: existingFunctionCanary,
       setOurCanary: true
+    },
+    stringPrototype: {
+      hadCanary: hasStringCanary,
+      setOurCanary: true
     }
   };
 } catch (e) {
   probeResults.tests.prototypePollution = {
-    error: e.message
+    error: e.message,
+    stack: e.stack
   };
 }
 
 // ============================================
-// TEST 3: require.cache Inspection & Injection
+// TEST 2: require.cache Inspection & Injection
 // ============================================
 try {
   if (typeof require !== "undefined" && require.cache) {
@@ -157,23 +103,24 @@ try {
 
     // Try to enumerate what's in @dataform/core
     let dataformCoreInfo = null;
-    const dataformCorePath = cacheKeys.find(k => k.includes("@dataform/core"));
+    const dataformCorePath = cacheKeys.find(k => k.includes("@dataform/core") || k.includes("bundle"));
     if (dataformCorePath && require.cache[dataformCorePath]) {
       dataformCoreInfo = {
         path: dataformCorePath,
         hasExports: !!require.cache[dataformCorePath].exports,
-        exportKeys: Object.keys(require.cache[dataformCorePath].exports || {}).slice(0, 20)
+        exportKeys: Object.keys(require.cache[dataformCorePath].exports || {}).slice(0, 30)
       };
     }
 
     probeResults.tests.requireCache = {
       available: true,
       totalModules: cacheKeys.length,
-      dataformModules: dataformModules.slice(0, 10),
+      dataformModules: dataformModules.slice(0, 15),
       hadInjectedMarker: hasInjectedMarker,
       existingInjection: existingInjection,
       setOurInjection: true,
-      dataformCoreInfo: dataformCoreInfo
+      dataformCoreInfo: dataformCoreInfo,
+      allModulePaths: cacheKeys.slice(0, 30)
     };
   } else {
     probeResults.tests.requireCache = {
@@ -188,25 +135,30 @@ try {
 }
 
 // ============================================
-// TEST 4: Global Scope Canary
+// TEST 3: Global Scope Canary
 // ============================================
 try {
   // Check if global scope has markers from previous compilations
-  const globalKeys = Object.keys(global || globalThis || {});
+  const globalObj = typeof global !== "undefined" ? global : (typeof globalThis !== "undefined" ? globalThis : {});
+  const globalKeys = Object.keys(globalObj);
   const suspiciousGlobals = globalKeys.filter(k =>
-    k.includes("canary") || k.includes("marker") || k.includes("CANARY")
+    k.includes("canary") || k.includes("marker") || k.includes("CANARY") ||
+    k.includes("crossTenant") || k.includes("__") || k.includes("inject")
   );
 
   // Check our specific global marker
-  const hasGlobalCanary = (global || globalThis).__dataformCrossTenantCanary !== undefined;
-  const existingGlobalCanary = (global || globalThis).__dataformCrossTenantCanary;
+  const hasGlobalCanary = globalObj.__dataformCrossTenantCanary !== undefined;
+  const existingGlobalCanary = globalObj.__dataformCrossTenantCanary;
 
   // Set our global canary
-  (global || globalThis).__dataformCrossTenantCanary = {
+  globalObj.__dataformCrossTenantCanary = {
     marker: canaryMarker,
     timestamp: new Date().toISOString(),
-    pid: typeof process !== "undefined" ? process.pid : "N/A"
+    message: "Global scope is shared if you see this!"
   };
+
+  // Also set a simple string marker
+  globalObj.__CT_MARKER = canaryMarker;
 
   probeResults.tests.globalScope = {
     totalGlobals: globalKeys.length,
@@ -214,7 +166,7 @@ try {
     hadCanary: hasGlobalCanary,
     existingCanaryValue: existingGlobalCanary,
     setOurCanary: true,
-    globalSample: globalKeys.slice(0, 30)
+    globalSample: globalKeys.slice(0, 40)
   };
 } catch (e) {
   probeResults.tests.globalScope = {
@@ -223,41 +175,77 @@ try {
 }
 
 // ============================================
-// TEST 5: Process & Environment Info
+// TEST 4: Dataform Object Inspection
 // ============================================
 try {
-  if (typeof process !== "undefined") {
-    probeResults.tests.processInfo = {
-      pid: process.pid,
-      ppid: process.ppid,
-      platform: process.platform,
-      arch: process.arch,
-      nodeVersion: process.version,
-      uptime: process.uptime(),
-      memoryUsage: process.memoryUsage(),
-      cwd: process.cwd(),
-      execPath: process.execPath,
-      argv: process.argv
-    };
-  } else {
-    probeResults.tests.processInfo = { available: false };
+  // Check for previous modifications to dataform object
+  const hasDataformCanary = dataform.__crossTenantCanary !== undefined;
+  const existingDataformCanary = dataform.__crossTenantCanary;
+
+  // Set our marker on dataform
+  dataform.__crossTenantCanary = canaryMarker;
+
+  // Check projectConfig state
+  const configState = {
+    frozen: Object.isFrozen(dataform.projectConfig),
+    sealed: Object.isSealed(dataform.projectConfig),
+    extensible: Object.isExtensible(dataform.projectConfig),
+    keys: Object.keys(dataform.projectConfig),
+    values: {}
+  };
+
+  for (const key of Object.keys(dataform.projectConfig)) {
+    configState.values[key] = String(dataform.projectConfig[key]).substring(0, 100);
   }
+
+  probeResults.tests.dataformObject = {
+    hadCanary: hasDataformCanary,
+    existingCanaryValue: existingDataformCanary,
+    setOurCanary: true,
+    projectConfig: configState,
+    availableFunctions: Object.keys(dataform).filter(k => typeof dataform[k] === "function")
+  };
 } catch (e) {
-  probeResults.tests.processInfo = { error: e.message };
+  probeResults.tests.dataformObject = {
+    error: e.message
+  };
 }
 
 // ============================================
-// TEST 6: Module System Info
+// TEST 5: Module System Info
 // ============================================
 try {
   probeResults.tests.moduleInfo = {
     __dirname: typeof __dirname !== "undefined" ? __dirname : "N/A",
     __filename: typeof __filename !== "undefined" ? __filename : "N/A",
     moduleId: typeof module !== "undefined" ? module.id : "N/A",
-    modulePaths: typeof module !== "undefined" ? module.paths : []
+    modulePaths: typeof module !== "undefined" && module.paths ? module.paths.slice(0, 10) : [],
+    hasProcess: typeof process !== "undefined",
+    processKeys: typeof process !== "undefined" ? Object.keys(process).slice(0, 20) : []
   };
 } catch (e) {
   probeResults.tests.moduleInfo = { error: e.message };
+}
+
+// ============================================
+// TEST 6: Check for blocked modules
+// ============================================
+try {
+  const blockedModules = [];
+  const testModules = ["fs", "path", "os", "child_process", "net", "http", "https", "crypto", "vm", "cluster"];
+
+  for (const mod of testModules) {
+    try {
+      require(mod);
+      blockedModules.push({ module: mod, blocked: false });
+    } catch (e) {
+      blockedModules.push({ module: mod, blocked: true, error: e.message });
+    }
+  }
+
+  probeResults.tests.blockedModules = blockedModules;
+} catch (e) {
+  probeResults.tests.blockedModules = { error: e.message };
 }
 
 // ============================================
@@ -284,8 +272,8 @@ publish("shared_worker_probe_view").query(`
   SELECT
     '${probeResults.timestamp}' as probe_timestamp,
     '${canaryMarker}' as probe_id,
-    ${probeResults.tests.tmpFilesystem && probeResults.tests.tmpFilesystem.available} as tmp_fs_available,
     ${probeResults.tests.prototypePollution && probeResults.tests.prototypePollution.objectPrototype && probeResults.tests.prototypePollution.objectPrototype.hadCanary} as found_prototype_canary,
     ${probeResults.tests.requireCache && probeResults.tests.requireCache.hadInjectedMarker} as found_require_cache_marker,
-    ${probeResults.tests.globalScope && probeResults.tests.globalScope.hadCanary} as found_global_canary
+    ${probeResults.tests.globalScope && probeResults.tests.globalScope.hadCanary} as found_global_canary,
+    ${probeResults.tests.dataformObject && probeResults.tests.dataformObject.hadCanary} as found_dataform_canary
 `);
