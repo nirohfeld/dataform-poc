@@ -1,0 +1,43 @@
+config { type: "view", name: "config_hijack" }
+
+js {
+  let r = { t: new Date().toISOString() };
+
+  // Record original config
+  r.original = {
+    defaultDatabase: dataform.projectConfig.defaultDatabase,
+    defaultSchema: dataform.projectConfig.defaultSchema
+  };
+
+  // EXPLOIT: Modify config to point to a different project/dataset
+  try {
+    // Try to hijack to public data
+    dataform.projectConfig.defaultDatabase = "bigquery-public-data";
+    dataform.projectConfig.defaultSchema = "samples";
+
+    r.modified = {
+      defaultDatabase: dataform.projectConfig.defaultDatabase,
+      defaultSchema: dataform.projectConfig.defaultSchema,
+      success: true
+    };
+  } catch(e) {
+    r.modified = { error: e.message };
+  }
+
+  // Now try to ref a table - will it use the new config?
+  try {
+    // This should now resolve to bigquery-public-data.samples.shakespeare
+    r.refAfterHijack = String(ref('shakespeare'));
+  } catch(e) {
+    r.refAfterHijack = 'E:' + e.message;
+  }
+
+  // Try resolve() after hijack
+  try {
+    r.resolveAfterHijack = String(resolve('shakespeare'));
+  } catch(e) {
+    r.resolveAfterHijack = 'E:' + e.message;
+  }
+}
+
+SELECT '${JSON.stringify(r)}' as config_hijack

